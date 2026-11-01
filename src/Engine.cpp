@@ -68,6 +68,21 @@ Engine::Engine(const std::filesystem::path& file, size_t max_batch_tokens)
     eos_token = static_cast<uint32_t>(*eos);
 }
 
+std::vector<uint32_t> Engine::simulate_inference(const std::vector<BatchEntry>& batch) {
+    std::vector<uint32_t> predictions;
+    for (const auto& entry : batch) {
+        for (size_t i = 0; i < entry.second; ++i) {
+            if (std::uniform_int_distribution<int>(0, 63)(random) == 0) {
+                predictions.push_back(eos_token);
+            } else {
+                const auto token = std::uniform_int_distribution<uint32_t>(0, embedlookup.get_vocabulary_size() - 2)(random);
+                predictions.push_back(token >= eos_token ? token + 1 : token);
+            }
+        }
+    }
+    return predictions;
+}
+
 std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
     using namespace kernels;
     std::vector<size_t> row_starts;
@@ -80,13 +95,6 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
         pending.insert(pending.end(), session->tokens.begin() + session->cached_tokens,session->tokens.begin() + session->cached_tokens + count);
     }
     if (batch.empty()) return {};
-
-    for (const auto& [session, count] : batch) {
-        if (session->kv_width == 0) session->kv_width = kv_heads * head_dim;
-        for (size_t i = 0; i < layer_count; ++i)
-            if (!session->update_cache(std::format("blk.{}.", i), *kv_cache_pool, count))
-                throw std::bad_alloc{};
-    }
 
     embedlookup.lookup(pending, token_buffer, embedding_rows);
     auto fp = [](DeviceBuffer& buffer) { return static_cast<float*>(buffer.data); };

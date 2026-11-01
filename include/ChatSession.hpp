@@ -30,6 +30,10 @@ struct ChatSession {
     std::size_t cached_tokens = 0;
     std::size_t cache_capacity = 2048;
 
+    std::size_t pending_tokens() const {
+        return tokens.size() - cached_tokens;
+    }
+
     CacheEntry* update_cache(const std::string& name, PagingCache<float>& pool,
         std::size_t new_tokens) {
         auto [it, inserted] = cache.try_emplace(name, pool);
