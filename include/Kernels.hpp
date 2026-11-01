@@ -1,5 +1,6 @@
 #pragma once
 #include "Weight.hpp"
+#include "PagingCache.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -65,6 +66,13 @@ void attention(const float* q, const float* k, const float* v, float* output,
     size_t tokens, size_t query_heads, size_t kv_heads, size_t head_dim,
     size_t query_offset = 0);
 
+// To implement: write new_k/new_v at query_offset, then attend over the paged cache.
+// New K has already been normalized and RoPE-transformed. All buffers are FP32.
+void paged_attention(const float* q, const float* new_k, const float* new_v,
+    PagedIterator<float> cached_k, PagedIterator<float> cached_v, float* output,
+    size_t tokens, size_t query_heads, size_t kv_heads, size_t head_dim,
+    size_t query_offset = 0);
+
 void residual_add(float* state, const float* branch, size_t count);
 
 void silu_multiply(const float* gate, const float* up, float* output, size_t count);
@@ -72,6 +80,8 @@ void silu_multiply(const float* gate, const float* up, float* output, size_t cou
 void dequantize_embeddings(const void* packed, float* output, size_t rows,
     size_t width, size_t row_bytes, ggml_type type);
 
+// One block per row; returns one vocabulary index per contiguous logits row.
+std::vector<uint32_t> argmax(const float* logits, size_t vocabulary_size, size_t rows);
 uint32_t argmax(const float* logits, size_t vocabulary_size);
 
 }

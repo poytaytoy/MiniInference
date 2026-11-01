@@ -75,7 +75,7 @@ void dequantize_embeddings(const void* packed, float* output, size_t rows,
 
     if (type == GGML_TYPE_Q4_K)
         dequantize_q4k<<<blocks, detail::threads>>>(
-            static_cast<const uint8_t*>(packed), output, count, width, row_bytes);
+        static_cast<const uint8_t*>(packed), output, count, width, row_bytes);
     else
         dequantize_q6k<<<blocks, detail::threads>>>(
             static_cast<const uint8_t*>(packed), output, count, width, row_bytes);

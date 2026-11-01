@@ -18,6 +18,8 @@ public:
     // One embedding per input ID, contiguous in input order.
     // Result shape: [token_ids.size(), get_embedding_size()].
     DeviceBuffer lookup(const std::vector<uint32_t>& token_ids) const;
+    void lookup(const std::vector<uint32_t>& token_ids, DeviceBuffer& output,
+        DeviceBuffer& packed_rows) const;
     size_t get_embedding_size() const { return embedding_size_; }
     size_t get_vocabulary_size() const { return vocabulary_size_; }
     ggml_type get_type() const { return type_; }

@@ -1,37 +1,39 @@
 #pragma once
 
 #include "Weight.hpp"
+#include "ManagedAllocator.hpp"
 #include <cassert>
 #include <cstddef>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
-template<typename T> 
-class PagingCache{ 
+template<typename T>
+class PagingCache{
     struct Page{
         DeviceBufferRef buffer;
     };
 
-    std::vector<std::unique_ptr<Page>> pages; 
+    std::vector<std::unique_ptr<Page>> pages;
     const std::size_t page_size;
     std::size_t num_of_pages;
-    DeviceBuffer buffer;     
+    DeviceBuffer buffer;
     std::mutex free_pages_mutex;
     std::queue<Page*> free_pages;
 
-    public: 
+    public:
 
+    // Sizes are element counts; Engine uses one token's K/V row per page.
     PagingCache(std::size_t allocation_needed, std::size_t page_size):
         page_size{(assert(page_size > 0), page_size)},
         num_of_pages{allocation_needed / page_size},
         buffer{num_of_pages * page_size * sizeof(T)}{
-            assert(allocation_needed > 0); 
             assert(num_of_pages > 0);
-
-            std::scoped_lock lock{free_pages_mutex};
 
             pages.reserve(num_of_pages);
             T* ptr = static_cast<T*>(buffer.data);
@@ -43,34 +45,30 @@ class PagingCache{
                 free_pages.push(pages.back().get());
             }
         }
-    
-    class PagedMemory{ 
-        PagingCache* owner; 
-        std::vector<Page*> ptr; 
-        DeviceBuffer device_page_table{0};
-        std::size_t page_size;
-        std::size_t capacity;  
-        std::size_t utilization; 
 
-        private: 
+    class PagedMemory{
+        PagingCache* owner;
+        std::vector<Page*> ptr;
+        std::vector<T*, ManagedAllocator<T*>> device_page_table;
+        T* const* page_table_data{nullptr};
+        std::size_t page_size;
+        std::size_t capacity;
+        std::size_t utilization{0};
+
+        private:
             PagedMemory(PagingCache* owner, std::vector<Page*>&& pages, std::size_t total_size)
                 : owner{owner}, page_size{owner->page_size}, capacity{total_size} {
-                std::vector<T*> data_ptrs;
-                data_ptrs.reserve(pages.size());
-
-                for (auto* page : pages){
-                    data_ptrs.push_back(static_cast<T*>(page->buffer.data));
-                }
-                    
-                device_page_table = DeviceBuffer(data_ptrs.data(), data_ptrs.size() * sizeof(T*));
+                device_page_table.reserve(pages.size());
+                for (auto* page : pages)
+                    device_page_table.push_back(static_cast<T*>(page->buffer.data));
+                page_table_data = device_page_table.data();
                 ptr = std::move(pages);
             }
 
             __device__ T* element_ptr(std::size_t index) const {
-                auto* pages = static_cast<T* const*>(device_page_table.data);
-                return pages[index / page_size] + index % page_size;
+                return page_table_data[index / page_size] + index % page_size;
             }
-            
+
             void free_pages(){
                 if (!owner || ptr.empty()) return;
                 std::scoped_lock lock{owner->free_pages_mutex};
@@ -79,18 +77,20 @@ class PagingCache{
                 }
                 ptr.clear();
             }
-        public: 
+        public:
 
         // only moving is permitted because each PagedMemory has unique ownership of its pages
-        PagedMemory(const PagedMemory& other) = delete; 
-        PagedMemory& operator=(const PagedMemory& other) = delete; 
+        PagedMemory(const PagedMemory& other) = delete;
+        PagedMemory& operator=(const PagedMemory& other) = delete;
 
         PagedMemory(PagedMemory&& other) noexcept
             : owner{std::exchange(other.owner, nullptr)},
               ptr{std::exchange(other.ptr, std::vector<Page*>{})},
               device_page_table{std::move(other.device_page_table)},
+              page_table_data{std::exchange(other.page_table_data, nullptr)},
               page_size{other.page_size},
-              capacity{std::exchange(other.capacity, 0)} {}
+              capacity{std::exchange(other.capacity, 0)},
+              utilization{std::exchange(other.utilization, 0)} {}
 
         PagedMemory& operator=(PagedMemory&& other){
             if (this == &other) return *this;
@@ -98,10 +98,12 @@ class PagingCache{
             owner = std::exchange(other.owner, nullptr);
             ptr = std::exchange(other.ptr, std::vector<Page*>{});
             device_page_table = std::move(other.device_page_table);
+            page_table_data = std::exchange(other.page_table_data, nullptr);
             page_size = other.page_size;
             capacity = std::exchange(other.capacity, 0);
-            
-            return *this; 
+            utilization = std::exchange(other.utilization, 0);
+
+            return *this;
         };
 
         class Iterator {
@@ -112,7 +114,7 @@ class PagingCache{
         public:
             // Host construction captures only device-accessible state for kernel arguments.
             explicit Iterator(const PagedMemory* p, std::size_t index = 0)
-                : pages(static_cast<T* const*>(p->device_page_table.data)),
+                : pages(p->page_table_data),
                   page_size(p->page_size), index(index) {}
 
             __device__ T& operator*() const {
@@ -129,13 +131,18 @@ class PagingCache{
                 return *this;
             }
 
+            __device__ Iterator& operator+=(std::size_t offset) {
+                index += offset;
+                return *this;
+            }
+
             __device__ bool operator!=(const Iterator& other) const {
                 return pages != other.pages || page_size != other.page_size || index != other.index;
-            }    
+            }
         };
 
         ~PagedMemory(){
-            free_pages(); 
+            free_pages();
         }
 
         __device__ T& operator[](std::size_t index){
@@ -146,6 +153,22 @@ class PagingCache{
             return *element_ptr(index);
         }
 
+        std::vector<T> copy_to_cpu(std::size_t count) const {
+            std::vector<T> result(count);
+            for (std::size_t offset = 0; offset < count; offset += page_size) {
+
+                const auto remaining = count - offset;
+                const auto elements = remaining < page_size ? remaining : page_size;
+                const auto error = cudaMemcpy(result.data() + offset,
+                    ptr[offset / page_size]->buffer.data, elements * sizeof(T),
+                    cudaMemcpyDeviceToHost);
+                if (error != cudaSuccess) {
+                    throw std::runtime_error(std::string("KV cache copy failed: ") + cudaGetErrorString(error));
+                }
+            }
+            return result;
+        }
+
         Iterator begin() const{
             return Iterator(this);
         }
@@ -153,22 +176,20 @@ class PagingCache{
         Iterator end() const{
             return Iterator(this, capacity);
         }
-        
-        friend class PagingCache; 
+
+        friend class PagingCache;
     };
 
-    // returns a bunch of paged memory does not gurantee. it does not gurantee you will get the size requested 
+    // Allocates up to the requested number of elements from available pages.
     PagedMemory allocate_memory(std::size_t allocation_needed){
-        std::size_t pages_need = (allocation_needed + page_size - 1)/page_size;   
-        std::vector<Page*> storage; 
+        std::size_t pages_need = allocation_needed / page_size + (allocation_needed % page_size != 0);
+        std::vector<Page*> storage;
         storage.reserve(pages_need);
 
-        std::scoped_lock lock{free_pages_mutex}; 
-        for (size_t i = 0; i < pages_need; i++){
-            if (!free_pages.empty()){
-                storage.push_back(free_pages.front()); 
-                free_pages.pop(); 
-            }
+        std::scoped_lock lock{free_pages_mutex};
+        while (storage.size() < pages_need && !free_pages.empty()) {
+            storage.push_back(free_pages.front());
+            free_pages.pop();
         }
 
         std::size_t memory_given = storage.size() * page_size;
@@ -176,34 +197,45 @@ class PagingCache{
         try {
             return PagedMemory(this, std::move(storage), memory_given);
         } catch (...) {
-            // The constructor takes ownership only after the upload succeeds.
+            // Return pages if constructing the page table fails.
             for (auto* page : storage) free_pages.push(page);
             throw;
         }
-    }; 
+    };
 
-    // Should return nothing if the memory request cannot be fullfilled. 
-    std::optional<typename PagingCache<T>::PagedMemory::Iterator> requset_memory(PagedMemory& host, std::size_t allocation_size){
-        std::size_t space_remaining = host.capacity - host.utilization; 
+    // Appends pages as needed; returns nullopt if the pool has too few pages.
+    std::optional<typename PagedMemory::Iterator> request_memory(PagedMemory& host, std::size_t allocation_size){
+        assert(host.owner == this);
 
-        if (space_remaining < allocation_size){ 
-            std::scoped_lock lock{free_pages_mutex}; 
-            if (!free_pages.empty()){
-                host.storage.push_back(free_pages.front()); 
-                free_pages.pop(); 
-            } else { 
-                return std::nullopt; 
+        const auto space_remaining = host.capacity - host.utilization;
+        if (allocation_size > space_remaining) {
+            const auto additional_size = allocation_size - space_remaining;
+            const auto pages_needed = additional_size / page_size + (additional_size % page_size != 0);
+            std::scoped_lock lock{free_pages_mutex};
+            if (free_pages.size() < pages_needed)
+                return std::nullopt;
+
+            for (std::size_t i = 0; i < pages_needed; ++i) {
+                auto* page = free_pages.front();
+                host.ptr.push_back(page);
+                host.device_page_table.push_back(static_cast<T*>(page->buffer.data));
+                free_pages.pop();
             }
+
+            host.page_table_data = host.device_page_table.data();
+            host.capacity += pages_needed * page_size;
         }
-        
-        return host + allocation_size; 
+
+        typename PagedMemory::Iterator result(&host, host.utilization);
+        host.utilization += allocation_size;
+        return result;
     }
 
-    friend class PagedMemory; 
+    friend class PagedMemory;
 };
 
 template<typename T>
-using PagedMemory = PagingCache<T>::PagedMemory; 
+using PagedMemory = typename PagingCache<T>::PagedMemory;
 
 template<typename T>
-using PagedReference = PagingCache<T>::PagedMemory::Iterator; 
+using PagedIterator = typename PagingCache<T>::PagedMemory::Iterator;

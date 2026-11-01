@@ -47,32 +47,26 @@ EmbedLookup& EmbedLookup::operator=(EmbedLookup&& other) noexcept {
 }
 
 DeviceBuffer EmbedLookup::lookup(const std::vector<uint32_t>& token_ids) const {
-    for (auto id : token_ids){
-        if (id >= vocabulary_size_) {
-            throw std::out_of_range("Embedding token ID out of range");
-        }
-    }
-        
-    if (type_ != GGML_TYPE_F32 && type_ != GGML_TYPE_Q4_K && type_ != GGML_TYPE_Q6_K){
-        throw std::invalid_argument("Unsupported embedding storage type");
-    }
+    DeviceBuffer output(token_ids.size() * embedding_size_ * sizeof(float));
+    DeviceBuffer packed_rows(token_ids.size() * row_bytes_);
+    lookup(token_ids, output, packed_rows);
+    return output;
+}
 
-    const size_t count = token_ids.size() * embedding_size_;
-    if (token_ids.empty()) return DeviceBuffer(size_t{0});
+void EmbedLookup::lookup(const std::vector<uint32_t>& token_ids,
+    DeviceBuffer& output, DeviceBuffer& packed_rows) const {
+    if (token_ids.empty()) return;
 
     std::vector<std::byte> packed(token_ids.size() * row_bytes_);
+    for (size_t i = 0; i < token_ids.size(); ++i)
+        std::memcpy(packed.data() + i * row_bytes_,
+            table_.data() + size_t(token_ids[i]) * row_bytes_, row_bytes_);
 
-    for (size_t i = 0; i < token_ids.size(); ++i){
-        std::memcpy(packed.data() + i * row_bytes_,table_.data() + static_cast<size_t>(token_ids[i]) * row_bytes_, row_bytes_);
-    }
-        
-    DeviceBuffer device_rows(packed.data(), packed.size());
-    if (type_ == GGML_TYPE_F32) return device_rows;
-
-    DeviceBuffer output(count * sizeof(float));
-
-    kernels::dequantize_embeddings(device_rows.data, static_cast<float*>(output.data),
-        token_ids.size(), embedding_size_, row_bytes_, type_);
-
-    return output;
+    void* destination = type_ == GGML_TYPE_F32 ? output.data : packed_rows.data;
+    const auto error = cudaMemcpy(destination, packed.data(), packed.size(), cudaMemcpyHostToDevice);
+    if (error != cudaSuccess)
+        throw std::runtime_error(std::string("Embedding upload failed: ") + cudaGetErrorString(error));
+    if (type_ != GGML_TYPE_F32)
+        kernels::dequantize_embeddings(packed_rows.data, static_cast<float*>(output.data),
+            token_ids.size(), embedding_size_, row_bytes_, type_);
 }
