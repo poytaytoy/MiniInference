@@ -6,8 +6,6 @@
 #include <stdexcept>
 #include <string>
 
-// Host-callable CUDA entry points. Float activations are row-major device buffers.
-// Launches use the default CUDA stream unless a stream parameter is provided.
 namespace kernels::detail {
 
 inline constexpr unsigned threads = 256;

@@ -22,6 +22,14 @@ struct DeviceBuffer{
     DeviceBuffer& operator=(DeviceBuffer&& other) noexcept;
 };
 
+struct DeviceBufferRef{
+    void* data{nullptr}; 
+    std::size_t bytes{0};
+
+    explicit DeviceBufferRef(DeviceBuffer owner): data{owner.data}, bytes{owner.bytes}{}
+    DeviceBufferRef(void* data, std::size_t bytes): data{data}, bytes{bytes}{}
+};
+
 struct Weight {
     std::string name; 
     ggml_type datatype; 
