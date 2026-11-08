@@ -2,7 +2,7 @@ find_package(Catch2 3 CONFIG REQUIRED)
 
 add_executable(inference_tests
     TokenizerTests.cpp
-    ChatFormatterTests.cpp
+    ChatHandlerTests.cpp
     EmbedLookupTests.cpp
     MatmulTests.cpp
     AttentionTests.cpp

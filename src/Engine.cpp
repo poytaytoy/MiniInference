@@ -7,14 +7,14 @@
 
 const char* const Engine::model_path = INFERENCE_MODEL_PATH;
 
-/*static*/ Engine& Engine::start(size_t max_batch_tokens){
-    static Engine engine(model_path, max_batch_tokens); 
+/*static*/ Engine& Engine::start(size_t max_batch_tokens, const std::filesystem::path& file){
+    static Engine engine(file.empty() ? std::filesystem::path(model_path) : file, max_batch_tokens);
 
     return engine; 
 };
 
 Engine::Engine(const std::filesystem::path& file, size_t max_batch_tokens)
-    : max_batch_tokens_(max_batch_tokens), gguf(file, false), tokenizer(gguf), chat_formatter(gguf), embedlookup(gguf),
+    : max_batch_tokens_(max_batch_tokens), gguf(file, false), embedlookup(gguf),
       width(embedlookup.get_embedding_size()),
       heads(gguf.get_attention_head_count().value()),
       kv_heads(gguf.get_value<uint32_t>("qwen3.attention.head_count_kv").value()),
@@ -84,6 +84,9 @@ std::vector<uint32_t> Engine::simulate_inference(const std::vector<BatchEntry>& 
 }
 
 std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
+#if INFERENCE_SIMULATED
+    return simulate_inference(batch);
+#else
     using namespace kernels;
     std::vector<size_t> row_starts;
     std::vector<uint32_t> pending;
@@ -143,4 +146,5 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
     matmul(fp(normalized), weights.at("token_embd.weight"), fp(logits), tokens);
     
     return argmax(fp(logits), embedlookup.get_vocabulary_size(), tokens);
+#endif
 }

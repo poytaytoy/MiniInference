@@ -4,3 +4,9 @@
 [submodule "third_party/tokenizers-cpp"]
 	path = third_party/tokenizers-cpp
 	url = https://github.com/mlc-ai/tokenizers-cpp.git
+[submodule "third_party/ggml"]
+	path = third_party/ggml
+	url = https://github.com/ggml-org/ggml.git
+[submodule "third_party/json"]
+	path = third_party/json
+	url = https://github.com/nlohmann/json.git

@@ -132,7 +132,7 @@ void TaskManager::process() {
 
         std::vector<uint32_t> predictions;
         try {
-            predictions = engine.simulate_inference(batch);
+            predictions = engine.inference(batch);
         } catch (...) {
             for (auto& task : tasks) {
                 finish(task, std::current_exception());

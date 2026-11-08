@@ -1,11 +1,11 @@
-#include "ChatFormatter.hpp"
+#include "ChatHandler.hpp"
 #include "TestModel.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <stdexcept>
 
-TEST_CASE("ChatFormatter renders real messages and Qwen prompt options", "[chat]") {
+TEST_CASE("ChatHandler renders real messages and Qwen prompt options", "[chat]") {
     GGUF model(test_model_path);
-    ChatFormatter formatter(model);
+    ChatHandler formatter(model);
     const std::vector<ChatMessage> messages = {{"system", "Be concise."},
                                                {"user", "Hello there."},
                                                {"assistant", "Hi!"},
@@ -26,9 +26,9 @@ TEST_CASE("ChatFormatter renders real messages and Qwen prompt options", "[chat]
     REQUIRE(thinking.find("</think>", without_generation.size()) == std::string::npos);
 }
 
-TEST_CASE("ChatFormatter rejects empty chats and unsupported roles", "[chat]") {
+TEST_CASE("ChatHandler rejects empty chats and unsupported roles", "[chat]") {
     GGUF model(test_model_path);
-    ChatFormatter formatter(model);
+    ChatHandler formatter(model);
     REQUIRE_THROWS_AS(formatter.render({}), std::invalid_argument);
     REQUIRE_THROWS_AS(formatter.render({{"invalid", "hi"}}), std::invalid_argument);
 }

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["scikit-build-core>=0.10,<1", "pybind11>=2.13,<4"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "local-inference-engine"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "pydantic>=2,<3",
+    "transformers>=4.45,<5",
+    "jinja2>=3.1,<4",
+    "numpy>=1.26",
+]
+
+[project.scripts]
+inference-server = "inference_engine.server:main"
+
+[tool.scikit-build]
+wheel.packages = ["python/inference_engine"]
+cmake.build-type = "Release"
+install.components = ["python"]
+
+[tool.scikit-build.cmake.define]
+BUILD_PYTHON = "ON"
+BUILD_TESTING = "OFF"
+BUILD_BENCHMARK = "OFF"
+BUILD_SHARED_LIBS = "OFF"
+INFERENCE_SIMULATED = "ON"

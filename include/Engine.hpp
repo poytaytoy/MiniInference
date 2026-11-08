@@ -1,8 +1,6 @@
 #pragma once
 #include "EmbedLookup.hpp"
 #include "GGUF.hpp"
-#include "Tokenizer.hpp"
-#include "ChatFormatter.hpp"
 #include "ChatSession.hpp"
 #include "Weight.hpp"
 #include <random>
@@ -10,7 +8,7 @@
 
 class Engine {
 public:
-    static Engine& start(size_t max_batch_tokens = 64); 
+    static Engine& start(size_t max_batch_tokens = 64, const std::filesystem::path& file = {});
     std::string run(ChatSession& session,
         bool enable_thinking = false, size_t max_new_tokens = 512,
         bool stream_output = true, bool stop_at_eos = true);
@@ -59,8 +57,6 @@ private:
     DeviceBuffer logits{size_t{0}};
 
     GGUF gguf;
-    Tokenizer tokenizer;
-    ChatFormatter chat_formatter;
     EmbedLookup embedlookup;
     const size_t width;
     const size_t heads;

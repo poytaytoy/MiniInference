@@ -1,5 +1,5 @@
 #pragma once
-#include "ChatFormatter.hpp"
+#include "ChatMessage.hpp"
 #include "PagingCache.hpp"
 #include <cstddef>
 #include <memory>
