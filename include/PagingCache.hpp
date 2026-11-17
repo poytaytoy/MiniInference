@@ -3,12 +3,15 @@
 #include "Weight.hpp"
 #include "ManagedAllocator.hpp"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -16,6 +19,8 @@
 
 template<typename T>
 class PagingCache{
+    static constexpr std::size_t TOKENS_PER_PAGE = 16;
+
     static inline void check_cuda(cudaError_t error, const char* message) {
         if (error != cudaSuccess) {
             throw std::runtime_error(std::string(message) + ": " + cudaGetErrorString(error));
@@ -23,12 +28,14 @@ class PagingCache{
     }
 
     struct Page{
-        std::vector<uint32_t> token_storage; 
+        std::array<uint32_t, TOKENS_PER_PAGE> token_storage;
         DeviceBufferView buffer;
+        std::string cache_key{};
     };
 
     std::vector<std::unique_ptr<Page>> pages;
     const std::size_t page_size;
+    const std::size_t kv_width;
     std::size_t num_of_pages;
     DeviceBuffer buffer;
     std::mutex free_pages_mutex;
@@ -36,17 +43,19 @@ class PagingCache{
 
     public:
 
-    // Sizes are element counts; Engine uses one token's K/V row per page.
-    PagingCache(std::size_t allocation_needed, std::size_t page_size):
-        page_size{(assert(page_size > 0), page_size)},
-        num_of_pages{allocation_needed / page_size},
+    PagingCache(std::size_t kv_width, std::size_t budget_bytes):
+        page_size{TOKENS_PER_PAGE * kv_width},
+        kv_width{kv_width},
+        num_of_pages{budget_bytes / (page_size * sizeof(T))},
         buffer{num_of_pages * page_size * sizeof(T)}{
-            assert(num_of_pages > 0);
-
+            if (num_of_pages == 0) {
+                throw std::runtime_error("Insufficient free GPU memory for KV cache pool");
+            }
             pages.reserve(num_of_pages);
             T* ptr = static_cast<T*>(buffer.data);
             for (std::size_t i = 0; i < num_of_pages; ++i){
                 auto page = std::make_unique<Page>(Page{
+                    {},
                     DeviceBufferView{ptr + i * page_size, page_size * sizeof(T)}
                 });
                 pages.push_back(std::move(page));
@@ -161,7 +170,7 @@ class PagingCache{
             return *element_ptr(index);
         }
 
-        void append_entry(DeviceBufferView entry, std::size_t offset){
+        void append_entry(DeviceBufferView entry, std::size_t offset, std::span<const uint32_t> tokens){
             const auto* data = reinterpret_cast<const std::byte*>(entry.data);
             if (offset > capacity || entry.bytes > (capacity - offset) * sizeof(T)) {
                 throw std::bad_alloc();
@@ -170,6 +179,7 @@ class PagingCache{
             std::size_t current_page = offset / page_size;
             std::size_t page_offset = (offset % page_size) * sizeof(T);
             std::size_t bytes_copied = 0;
+            const auto row_bytes = owner->kv_width * sizeof(T);
 
             while (bytes_copied < entry.bytes) {
                 const std::size_t allocation = std::min(page_size * sizeof(T) - page_offset, entry.bytes - bytes_copied);
@@ -177,6 +187,8 @@ class PagingCache{
                 const auto error = cudaMemcpy(destination + page_offset, data + bytes_copied,
                     allocation, cudaMemcpyDeviceToDevice);
                 check_cuda(error, "KV cache append failed");
+                auto& page_tokens = ptr[current_page]->token_storage;
+                std::copy_n(tokens.data() + bytes_copied / row_bytes, allocation / row_bytes, page_tokens.data() + page_offset / row_bytes);
                 bytes_copied += allocation;
                 ++current_page;
                 page_offset = 0;

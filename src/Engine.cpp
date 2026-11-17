@@ -60,12 +60,7 @@ Engine::Engine(const std::filesystem::path& file, size_t max_batch_tokens)
 
     const auto headroom = std::max(free_bytes / 4, size_t{1} << 30);
     const auto budget = free_bytes > headroom ? free_bytes - headroom : 0;
-    const auto page_size = 16 * kv_width;
-    const auto page_count = budget / (page_size * sizeof(float));
-    if (page_count == 0)
-        throw std::runtime_error("Insufficient free GPU memory for KV cache pool");
-
-    kv_cache_pool = std::make_unique<PagingCache<float>>(page_count * page_size, page_size);
+    kv_cache_pool = std::make_unique<PagingCache<float>>(kv_width, budget);
 
     const auto eos = gguf.get_eos_token_id();
     
@@ -134,9 +129,10 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
             auto& cached_v = session->get_v(prefix);
             const auto cache_offset = offset * kv_heads * head_dim;
             const auto entry_bytes = count * kv_heads * head_dim * sizeof(float);
-            cached_k.append_entry(DeviceBufferView{fp(k_normalized) + kv_offset, entry_bytes}, cache_offset);
+            const auto entry_tokens = std::span<const uint32_t>{pending}.subspan(row, count);
+            cached_k.append_entry(DeviceBufferView{fp(k_normalized) + kv_offset, entry_bytes}, cache_offset, entry_tokens);
             
-            cached_v.append_entry(DeviceBufferView{fp(v) + kv_offset, entry_bytes}, cache_offset);
+            cached_v.append_entry(DeviceBufferView{fp(v) + kv_offset, entry_bytes}, cache_offset, entry_tokens);
             attention(fp(q_normalized) + q_offset, cached_k.begin(), cached_v.begin(),
                 fp(attended) + q_offset, count, heads, kv_heads, head_dim, offset);
         }
