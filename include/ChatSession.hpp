@@ -12,9 +12,7 @@ struct ChatSession {
     struct CacheEntry {
         std::unique_ptr<PagedMemory<float>> key;
         std::unique_ptr<PagedMemory<float>> value;
-        std::vector<float> key_tokens;
-        std::vector<float> value_tokens;
-        
+
         std::size_t gpu_allocated_key_tokens{0};
         std::size_t gpu_allocated_value_tokens{0};
 
@@ -42,7 +40,6 @@ struct ChatSession {
             if (inserted) cache.erase(it);
             return nullptr;
         };
-        if (!entry.key || !entry.value) return nullptr;
         const auto required_tokens = cached_tokens + new_tokens;
         if (required_tokens > cache_capacity)
             throw std::out_of_range("KV cache capacity exceeded");
@@ -67,21 +64,6 @@ struct ChatSession {
 
     PagedMemory<float>& get_v(const std::string& name){
         return *cache.at(name).value; 
-    }
-
-    // Offload completed cache rows, then return their GPU pages to the pool.
-    void offload_cache() {
-        for (auto& [name, entry] : cache) {
-            if (!entry.key || !entry.value) continue;
-            auto keys = entry.key->copy_to_cpu(cached_tokens * kv_width);
-            auto values = entry.value->copy_to_cpu(cached_tokens * kv_width);
-            entry.key_tokens = std::move(keys);
-            entry.value_tokens = std::move(values);
-            entry.key.reset();
-            entry.value.reset();
-            entry.gpu_allocated_key_tokens = 0;
-            entry.gpu_allocated_value_tokens = 0;
-        }
     }
 
     ChatSession() = default;

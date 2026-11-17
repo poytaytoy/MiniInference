@@ -17,10 +17,8 @@ public:
 
     uint32_t inference(ChatSession& session);
     using BatchEntry = std::pair<ChatSession*, size_t>;
+    
     std::vector<uint32_t> simulate_inference(const std::vector<BatchEntry>& batch);
-    // One prediction per input token, in packed batch order.
-    // TaskManager prepares each session's K/V allocations before calling.
-    // Caller advances each session's cached_tokens after a successful return.
     std::vector<uint32_t> inference(const std::vector<BatchEntry>& batch);
 
     void append_token(ChatSession& session, uint32_t token);

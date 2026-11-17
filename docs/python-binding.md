@@ -103,8 +103,7 @@ through the binding as Python exceptions.
 
 ## ChatSession
 
-`ChatSession()` stores token IDs and native KV cache state. The Python serving
-layer keeps conversation messages separately in `SessionState`.
+`ChatSession()` stores token IDs and native KV cache state.
 
 | Member | Behavior |
 | --- | --- |
@@ -113,10 +112,6 @@ layer keeps conversation messages separately in `SessionState`.
 | `cached_tokens` | Read-only number of tokens already processed into the cache. |
 | `cache_capacity` | Writable session capacity, initially 2048 tokens. |
 | `pending_tokens()` | Returns `token_count - cached_tokens`. |
-| `offload_cache()` | Copies completed cache rows to CPU memory and releases their GPU pages. Releases the GIL. |
-
-The binding does not expose cache restoration. The Python server does not
-currently call `offload_cache()`.
 
 ## Python serving layer
 
@@ -126,17 +121,14 @@ the runtime. It applies the chat template, prepares token IDs, requests tokens
 until EOS or a generation limit, and decodes the output incrementally.
 
 Token requests run through `asyncio.to_thread`, keeping the HTTP event loop
-available. Each session has an asyncio lock to serialize requests that use the
-same session. If generation is cancelled while native work is running, Python
+available. If generation is cancelled while native work is running, Python
 waits for that work before releasing the session.
 
 [server.py](../python/inference_engine/server.py) exposes `/v1/models` and
 `/v1/chat/completions`. Chat responses support complete JSON responses and SSE
-streaming. An optional `session_id` lets requests append messages to stored
-conversation history. The server runs with one worker process.
-
-During shutdown, the server releases stored sessions before closing the runtime
-so their GPU allocations are released while the engine's cache pool exists.
+streaming. Each request creates a session for generation. For multi-turn chat,
+send the full conversation history in `messages` on each request. The server
+runs with one worker process.
 
 ## Prediction mode
 

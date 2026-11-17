@@ -1,7 +1,7 @@
 """Conversation preparation and generation, independent of HTTP."""
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -9,13 +9,6 @@ from transformers import PreTrainedTokenizerFast
 from transformers.generation.streamers import TextStreamer
 
 from ._inference_engine import ChatSession, Runtime
-
-
-@dataclass
-class SessionState:
-    session: ChatSession = field(default_factory=ChatSession)
-    messages: list[dict[str, str]] = field(default_factory=list)
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 @dataclass
@@ -56,16 +49,15 @@ class ChatHandler:
             eos_token=runtime.eos_token,
         )
 
-    def prepare(self, state: SessionState, messages, enable_thinking=False):
+    def prepare(self, session: ChatSession, messages, enable_thinking=False):
         tokens = self.tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True, enable_thinking=enable_thinking
         )
-        state.session.prepare_tokens(tokens)
-        state.messages = list(messages)
+        session.prepare_tokens(tokens)
         return Generation(prompt_tokens=len(tokens))
 
-    async def next_token(self, state: SessionState):
-        pending = asyncio.create_task(asyncio.to_thread(self.runtime.next_token, state.session))
+    async def next_token(self, session: ChatSession):
+        pending = asyncio.create_task(asyncio.to_thread(self.runtime.next_token, session))
         try:
             return await asyncio.shield(pending)
         except asyncio.CancelledError:
@@ -73,13 +65,13 @@ class ChatHandler:
             await pending
             raise
 
-    async def generate(self, state: SessionState, result: Generation, max_tokens=512):
-        """Yield decoded text chunks; callers serialize access with state.lock."""
+    async def generate(self, session: ChatSession, result: Generation, max_tokens=512):
+        """Yield decoded text chunks for the request's session."""
         generated = []
         streamer = _TextChunks(self.tokenizer)
         try:
-            while len(generated) < max_tokens and state.session.token_count <= state.session.cache_capacity:
-                token = await self.next_token(state)
+            while len(generated) < max_tokens and session.token_count <= session.cache_capacity:
+                token = await self.next_token(session)
                 generated.append(token)
                 result.completion_tokens = len(generated)
                 if token == self.runtime.eos_token_id:
@@ -96,4 +88,3 @@ class ChatHandler:
             result.text = self.tokenizer.decode(
                 generated, skip_special_tokens=True, clean_up_tokenization_spaces=False
             )
-            state.messages.append({"role": "assistant", "content": result.text})

@@ -53,8 +53,7 @@ PYBIND11_MODULE(_inference_engine, module) {
         .def_property_readonly("token_count", [](const ChatSession& session) { return session.tokens.size(); })
         .def_readonly("cached_tokens", &ChatSession::cached_tokens)
         .def_readwrite("cache_capacity", &ChatSession::cache_capacity)
-        .def("pending_tokens", &ChatSession::pending_tokens)
-        .def("offload_cache", &ChatSession::offload_cache, py::call_guard<py::gil_scoped_release>());
+        .def("pending_tokens", &ChatSession::pending_tokens);
 
     py::class_<Runtime>(module, "Runtime")
         .def(py::init<const std::string&, size_t>(), py::arg("model_path"), py::arg("batch_tokens") = 64,

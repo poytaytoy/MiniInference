@@ -23,6 +23,7 @@ class PagingCache{
     }
 
     struct Page{
+        std::vector<uint32_t> token_storage; 
         DeviceBufferView buffer;
     };
 
@@ -158,20 +159,6 @@ class PagingCache{
 
         __device__ const T& operator[](std::size_t index) const{
             return *element_ptr(index);
-        }
-
-        std::vector<T> copy_to_cpu(std::size_t count) const {
-            std::vector<T> result(count);
-            for (std::size_t offset = 0; offset < count; offset += page_size) {
-
-                const auto remaining = count - offset;
-                const auto elements = remaining < page_size ? remaining : page_size;
-                const auto error = cudaMemcpy(result.data() + offset,
-                    ptr[offset / page_size]->buffer.data, elements * sizeof(T),
-                    cudaMemcpyDeviceToHost);
-                check_cuda(error, "KV cache copy failed");
-            }
-            return result;
         }
 
         void append_entry(DeviceBufferView entry, std::size_t offset){
