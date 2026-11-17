@@ -174,9 +174,9 @@ class PagingCache{
             return result;
         }
 
-        void append_entry(DeviceBuffer& entry, std::size_t offset){
+        void append_entry(DeviceBufferView entry, std::size_t offset){
             const auto* data = reinterpret_cast<const std::byte*>(entry.data);
-            if (offset > utilization || entry.bytes > (utilization - offset) * sizeof(T)) {
+            if (offset > capacity || entry.bytes > (capacity - offset) * sizeof(T)) {
                 throw std::bad_alloc();
             }
 
@@ -194,6 +194,7 @@ class PagingCache{
                 ++current_page;
                 page_offset = 0;
             }
+            utilization = std::max(utilization, offset + entry.bytes / sizeof(T));
         }
 
         Iterator begin() const{

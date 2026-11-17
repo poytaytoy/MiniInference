@@ -130,8 +130,14 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
             rope(fp(q_normalized) + q_offset, count, heads, head_dim, offset, rope_base);
             rope(fp(k_normalized) + kv_offset, count, kv_heads, head_dim, offset, rope_base);
             
-            paged_attention(fp(q_normalized) + q_offset, fp(k_normalized) + kv_offset,
-                fp(v) + kv_offset, session->get_k(prefix), session->get_v(prefix),
+            auto& cached_k = session->get_k(prefix);
+            auto& cached_v = session->get_v(prefix);
+            const auto cache_offset = offset * kv_heads * head_dim;
+            const auto entry_bytes = count * kv_heads * head_dim * sizeof(float);
+            cached_k.append_entry(DeviceBufferView{fp(k_normalized) + kv_offset, entry_bytes}, cache_offset);
+            
+            cached_v.append_entry(DeviceBufferView{fp(v) + kv_offset, entry_bytes}, cache_offset);
+            attention(fp(q_normalized) + q_offset, cached_k.begin(), cached_v.begin(),
                 fp(attended) + q_offset, count, heads, kv_heads, head_dim, offset);
         }
 

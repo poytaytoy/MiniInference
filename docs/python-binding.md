@@ -8,8 +8,7 @@ The binding is implemented in [bindings/python.cpp](../bindings/python.cpp).
 
 ## Usage example
 
-This example shows the native binding with Python tokenization. Token generation
-requires the pending `paged_attention` implementation described below.
+This example shows the native binding with Python tokenization.
 
 ```python
 from transformers import PreTrainedTokenizerFast
@@ -150,9 +149,8 @@ It still loads the GGUF model, allocates GPU buffers, and uses the task manager
 and cache allocation path. It therefore still needs model files and working
 CUDA support.
 
-The non-simulated inference path calls `paged_attention`, which is declared but
-has no implementation yet (`src/cuda/attention2.cu` is a placeholder). It still
-needs cache writes and attention across cache pages before real inference can run.
+The non-simulated inference path appends new keys and values to the session’s
+paged cache, then runs attention through paged iterators.
 
 ## Build
 

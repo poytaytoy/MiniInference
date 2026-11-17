@@ -1,7 +1,6 @@
 // Causal grouped-query attention with tiled online softmax and FP32 K/V caches.
 #include "Kernels.hpp"
 #include <math_constants.h>
-#include <limits>
 
 namespace {
 constexpr unsigned warp_width = 32;
@@ -20,7 +19,7 @@ __device__ float warp_max(float value) {
     return __shfl_sync(0xffffffffu, value, 0);
 }
 
-__global__ void attention_kernel(const float* q, const float* k, const float* v,
+__global__ void attention_kernel(const float* q, PagedIterator<float> k, PagedIterator<float> v,
     float* output, size_t query_heads, size_t kv_heads, size_t head_dim, size_t query_offset) {
     __shared__ float scores[key_tile_rows];
     __shared__ float weights[key_tile_rows];
@@ -92,17 +91,13 @@ __global__ void attention_kernel(const float* q, const float* k, const float* v,
 } // namespace
 
 namespace kernels {
-void attention(const float* q, const float* k, const float* v, float* output,
+void attention(const float* q, PagedIterator<float> k, PagedIterator<float> v, float* output,
     size_t tokens, size_t query_heads, size_t kv_heads, size_t head_dim, size_t query_offset) {
     if (tokens == 0) return;
-    if (!q || !k || !v || !output || kv_heads == 0 || query_heads == 0 ||
-        query_heads % kv_heads != 0 || head_dim == 0 || head_dim > 256 ||
-        tokens > static_cast<size_t>(std::numeric_limits<int>::max()) / query_heads ||
-        tokens > std::numeric_limits<size_t>::max() / query_heads / head_dim / sizeof(float))
+    if (!q || !output || kv_heads == 0 || query_heads == 0 ||
+        query_heads % kv_heads != 0 || head_dim == 0 || head_dim > 256) {
         throw std::invalid_argument("Attention requires valid buffers, divisible Q/KV heads and head_dim in [1, 256]");
-    const size_t max_cached_tokens = std::numeric_limits<size_t>::max() / kv_heads / head_dim / sizeof(float);
-    if (tokens > max_cached_tokens || query_offset > max_cached_tokens - tokens)
-        throw std::invalid_argument("Attention cache dimensions overflow");
+    }
 
     attention_kernel<<<tokens * query_heads, attention_threads>>>(
         q, k, v, output, query_heads, kv_heads, head_dim, query_offset);

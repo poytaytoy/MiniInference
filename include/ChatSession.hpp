@@ -61,12 +61,12 @@ struct ChatSession {
         return &entry;
     }
 
-    PagedIterator<float> get_k(const std::string& name){
-        return cache.at(name).key->begin(); 
+    PagedMemory<float>& get_k(const std::string& name){
+        return *cache.at(name).key; 
     }
 
-    PagedIterator<float> get_v(const std::string& name){
-        return cache.at(name).value->begin(); 
+    PagedMemory<float>& get_v(const std::string& name){
+        return *cache.at(name).value; 
     }
 
     // Offload completed cache rows, then return their GPU pages to the pool.

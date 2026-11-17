@@ -65,14 +65,7 @@ void matmul(const float* input, const Weight& weight, float* output, size_t rows
 void rope(float* input, size_t tokens, size_t heads, size_t head_dim,
     size_t position_offset, float frequency_base);
 
-void attention(const float* q, const float* k, const float* v, float* output,
-    size_t tokens, size_t query_heads, size_t kv_heads, size_t head_dim,
-    size_t query_offset = 0);
-
-// To implement: write new_k/new_v at query_offset, then attend over the paged cache.
-// New K has already been normalized and RoPE-transformed. All buffers are FP32.
-void paged_attention(const float* q, const float* new_k, const float* new_v,
-    PagedIterator<float> cached_k, PagedIterator<float> cached_v, float* output,
+void attention(const float* q, PagedIterator<float> k, PagedIterator<float> v, float* output,
     size_t tokens, size_t query_heads, size_t kv_heads, size_t head_dim,
     size_t query_offset = 0);
 
