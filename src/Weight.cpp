@@ -3,21 +3,28 @@
 #include <stdexcept>
 #include <utility>
 
+namespace {
+void check_cuda(cudaError_t error, const char* message) {
+    if (error != cudaSuccess) {
+        throw std::runtime_error(std::string(message) + ": " + cudaGetErrorString(error));
+    }
+}
+}
+
 DeviceBuffer::DeviceBuffer(const void* source, std::size_t source_bytes, cudaStream_t allocation_stream)
     : stream(allocation_stream) {
     if (source_bytes == 0) return;
     if (!source) throw std::invalid_argument("Nonempty DeviceBuffer requires host data");
 
     auto error = cudaMallocAsync(&data, source_bytes, stream);
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("cudaMallocAsync failed: ") + cudaGetErrorString(error));
+    check_cuda(error, "cudaMallocAsync failed");
 
     error = cudaMemcpyAsync(data, source, source_bytes, cudaMemcpyHostToDevice, stream);
     if (error == cudaSuccess) error = cudaStreamSynchronize(stream);
     if (error != cudaSuccess) {
         cudaFreeAsync(data, stream);
         data = nullptr;
-        throw std::runtime_error(std::string("Host-to-device copy failed: ") + cudaGetErrorString(error));
+        check_cuda(error, "Host-to-device copy failed");
     }
     bytes = source_bytes;
 }
@@ -26,8 +33,7 @@ DeviceBuffer::DeviceBuffer(std::size_t source_bytes, cudaStream_t allocation_str
     : stream(allocation_stream) {
     if (source_bytes == 0) return;
     const auto error = cudaMallocAsync(&data, source_bytes, stream);
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("cudaMallocAsync failed: ") + cudaGetErrorString(error));
+    check_cuda(error, "cudaMallocAsync failed");
     bytes = source_bytes;
 }
 

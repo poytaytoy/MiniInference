@@ -9,25 +9,28 @@
 
 namespace kernels::detail {
 
+inline void check_cuda(cudaError_t error, const char* message) {
+    if (error != cudaSuccess) {
+        throw std::runtime_error(std::string(message) + ": " + cudaGetErrorString(error));
+    }
+}
+
 inline constexpr unsigned threads = 256;
 
 inline int get_sm_count() {
     int device;
     auto error = cudaGetDevice(&device);
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("CUDA device query failed: ") + cudaGetErrorString(error));
+    check_cuda(error, "CUDA device query failed");
 
     int count;
     error = cudaDeviceGetAttribute(&count, cudaDevAttrMultiProcessorCount, device);
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("CUDA SM count query failed: ") + cudaGetErrorString(error));
+    check_cuda(error, "CUDA SM count query failed");
     return count;
 }
 
 inline void check_launch() {
     const auto error = cudaGetLastError();
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("CUDA kernel launch failed: ") + cudaGetErrorString(error));
+    check_cuda(error, "CUDA kernel launch failed");
 }
 
 }

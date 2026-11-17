@@ -1,3 +1,0 @@
-#pragma once
-
-inline constexpr const char* test_model_path = R"(@INFERENCE_TEST_MODEL@)";

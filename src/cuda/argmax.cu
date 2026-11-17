@@ -5,6 +5,14 @@
 #include <math_constants.h>
 
 namespace {
+void check_cuda(cudaError_t error, const char* message) {
+    if (error != cudaSuccess) {
+        throw std::runtime_error(std::string(message) + ": " + cudaGetErrorString(error));
+    }
+}
+}
+
+namespace {
 using kernels::detail::threads;
 constexpr float negative_infinity = -std::numeric_limits<float>::infinity();
 struct candidate {
@@ -61,10 +69,7 @@ __global__ void argmax_kernel(const float* __restrict logits, candidate* __restr
     }
 }   
 
-void check_cuda(cudaError_t error) {
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("CUDA argmax failed: ") + cudaGetErrorString(error));
-}
+
 
 }
 
@@ -86,7 +91,7 @@ std::vector<uint32_t> argmax(const float* logits, size_t vocabulary_size, size_t
     detail::check_launch();
 
     std::vector<candidate> results(rows);
-    check_cuda(cudaMemcpy(results.data(), device_result, sizeof(candidate) * rows, cudaMemcpyDeviceToHost));
+    check_cuda(cudaMemcpy(results.data(), device_result, sizeof(candidate) * rows, cudaMemcpyDeviceToHost), "CUDA argmax failed");
     
     std::vector<uint32_t> indices(rows);
     for (size_t row = 0; row < rows; ++row)

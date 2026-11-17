@@ -2,16 +2,17 @@
 #include <utility>
 
 namespace {
-void check_stream(cudaError_t error) {
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("CUDA stream error: ") + cudaGetErrorString(error));
+void check_cuda(cudaError_t error, const char* message) {
+    if (error != cudaSuccess) {
+        throw std::runtime_error(std::string(message) + ": " + cudaGetErrorString(error));
+    }
 }
 }
 
 namespace kernels {
 
 CudaStream::CudaStream() {
-    check_stream(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+    check_cuda(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking), "CUDA stream error");
 }
 
 CudaStream::~CudaStream() {
@@ -35,13 +36,13 @@ cudaStream_t CudaStream::get() const {
 }
 
 void CudaStream::synchronize() const {
-    check_stream(cudaStreamSynchronize(get()));
+    check_cuda(cudaStreamSynchronize(get()), "CUDA stream error");
 }
 
 bool CudaStream::ready() const {
     const auto error = cudaStreamQuery(get());
     if (error == cudaErrorNotReady) return false;
-    check_stream(error);
+    check_cuda(error, "CUDA stream error");
     return true;
 }
 

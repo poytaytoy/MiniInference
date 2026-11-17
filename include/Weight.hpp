@@ -22,12 +22,12 @@ struct DeviceBuffer{
     DeviceBuffer& operator=(DeviceBuffer&& other) noexcept;
 };
 
-struct DeviceBufferRef{
+struct DeviceBufferView{
     void* data{nullptr}; 
     std::size_t bytes{0};
 
-    explicit DeviceBufferRef(DeviceBuffer owner): data{owner.data}, bytes{owner.bytes}{}
-    DeviceBufferRef(void* data, std::size_t bytes): data{data}, bytes{bytes}{}
+    explicit DeviceBufferView(DeviceBuffer owner): data{owner.data}, bytes{owner.bytes}{}
+    DeviceBufferView(void* data, std::size_t bytes): data{data}, bytes{bytes}{}
 };
 
 struct Weight {

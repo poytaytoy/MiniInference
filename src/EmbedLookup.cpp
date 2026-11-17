@@ -8,6 +8,14 @@
 #include <stdexcept>
 #include <utility>
 
+namespace {
+void check_cuda(cudaError_t error, const char* message) {
+    if (error != cudaSuccess) {
+        throw std::runtime_error(std::string(message) + ": " + cudaGetErrorString(error));
+    }
+}
+}
+
 EmbedLookup::EmbedLookup(const GGUF& model, const std::string& tensor_name) {
     const auto* info = model.get_tensor_info(tensor_name);
     type_ = info->type;
@@ -64,8 +72,7 @@ void EmbedLookup::lookup(const std::vector<uint32_t>& token_ids,
 
     void* destination = type_ == GGML_TYPE_F32 ? output.data : packed_rows.data;
     const auto error = cudaMemcpy(destination, packed.data(), packed.size(), cudaMemcpyHostToDevice);
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("Embedding upload failed: ") + cudaGetErrorString(error));
+    check_cuda(error, "Embedding upload failed");
     if (type_ != GGML_TYPE_F32)
         kernels::dequantize_embeddings(packed_rows.data, static_cast<float*>(output.data),
             token_ids.size(), embedding_size_, row_bytes_, type_);

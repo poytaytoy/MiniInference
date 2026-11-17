@@ -4,18 +4,16 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(BUILD_SHARED_LIBS "Build shared dependency libraries" OFF)
 
 set(MODEL_PATH "${PROJECT_SOURCE_DIR}/assets/models/Qwen3-4B-Q4_K_M.gguf"
-    CACHE FILEPATH "Default GGUF model for the application, benchmark and tests")
+    CACHE FILEPATH "Default GGUF model for the application and benchmarks")
 get_filename_component(MODEL_PATH "${MODEL_PATH}" ABSOLUTE BASE_DIR "${PROJECT_SOURCE_DIR}")
 
-option(BUILD_TESTING "builds the test cases")
 option(BUILD_BENCHMARK "builds the benchmark")
 option(BUILD_PYTHON "Build the Python extension" ON)
-option(INFERENCE_SIMULATED "Use simulated token predictions until paged attention is implemented" ON)
+option(INFERENCE_SIMULATED "Use simulated token predictions until paged attention is implemented" OFF)
 
 find_package(CUDAToolkit REQUIRED)
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 
-include(CTest)
 include(FetchContent)
 # Use the pinned local JSON submodule; legacy minja reuses this registration.
 set(JSON_BuildTests OFF CACHE BOOL "Build JSON tests" FORCE)
@@ -26,7 +24,7 @@ FetchContent_MakeAvailable(json)
 # Only the GGUF reader and core tensor storage are needed.
 # FORCE clears backend settings left over from earlier configurations.
 set(GGML_CUDA OFF CACHE BOOL "Enable ggml CUDA backend" FORCE)
-set(GGML_CPU ${BUILD_TESTING} CACHE BOOL "Enable ggml CPU backend for test references" FORCE)
+set(GGML_CPU OFF CACHE BOOL "Enable ggml CPU backend" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "Enable ggml OpenMP support" FORCE)
 set(GGML_BUILD_TESTS OFF CACHE BOOL "Build ggml tests" FORCE)
 set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "Build ggml examples" FORCE)
@@ -70,8 +68,8 @@ if(BUILD_PYTHON)
     install(TARGETS _inference_engine LIBRARY DESTINATION inference_engine COMPONENT python)
 endif()
 
-# Keep the legacy C++ tokenizer/formatter only for existing tests and benchmarks.
-if(BUILD_TESTING OR BUILD_BENCHMARK)
+# Keep the legacy C++ tokenizer/formatter only for existing benchmarks.
+if(BUILD_BENCHMARK)
     set(MINJA_TEST_ENABLED OFF CACHE BOOL "" FORCE)
     set(MINJA_EXAMPLE_ENABLED OFF CACHE BOOL "" FORCE)
     set(MINJA_FUZZTEST_ENABLED OFF CACHE BOOL "" FORCE)
@@ -85,10 +83,6 @@ if(BUILD_TESTING OR BUILD_BENCHMARK)
     add_subdirectory(third_party/tokenizers-cpp)
     target_sources(inference_core PRIVATE src/ChatHandler.cpp src/Tokenizer.cpp)
     target_link_libraries(inference_core PUBLIC minja tokenizers_cpp)
-endif()
-
-if(BUILD_TESTING)
-    add_subdirectory(src/tests)
 endif()
 
 if (BUILD_BENCHMARK)

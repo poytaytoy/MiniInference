@@ -2,6 +2,7 @@
 
 #include "Weight.hpp"
 #include "ManagedAllocator.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <memory>
@@ -15,8 +16,14 @@
 
 template<typename T>
 class PagingCache{
+    static inline void check_cuda(cudaError_t error, const char* message) {
+        if (error != cudaSuccess) {
+            throw std::runtime_error(std::string(message) + ": " + cudaGetErrorString(error));
+        }
+    }
+
     struct Page{
-        DeviceBufferRef buffer;
+        DeviceBufferView buffer;
     };
 
     std::vector<std::unique_ptr<Page>> pages;
@@ -39,7 +46,7 @@ class PagingCache{
             T* ptr = static_cast<T*>(buffer.data);
             for (std::size_t i = 0; i < num_of_pages; ++i){
                 auto page = std::make_unique<Page>(Page{
-                    DeviceBufferRef{ptr + i * page_size, page_size * sizeof(T)}
+                    DeviceBufferView{ptr + i * page_size, page_size * sizeof(T)}
                 });
                 pages.push_back(std::move(page));
                 free_pages.push(pages.back().get());
@@ -162,11 +169,31 @@ class PagingCache{
                 const auto error = cudaMemcpy(result.data() + offset,
                     ptr[offset / page_size]->buffer.data, elements * sizeof(T),
                     cudaMemcpyDeviceToHost);
-                if (error != cudaSuccess) {
-                    throw std::runtime_error(std::string("KV cache copy failed: ") + cudaGetErrorString(error));
-                }
+                check_cuda(error, "KV cache copy failed");
             }
             return result;
+        }
+
+        void append_entry(DeviceBuffer& entry, std::size_t offset){
+            const auto* data = reinterpret_cast<const std::byte*>(entry.data);
+            if (offset > utilization || entry.bytes > (utilization - offset) * sizeof(T)) {
+                throw std::bad_alloc();
+            }
+
+            std::size_t current_page = offset / page_size;
+            std::size_t page_offset = (offset % page_size) * sizeof(T);
+            std::size_t bytes_copied = 0;
+
+            while (bytes_copied < entry.bytes) {
+                const std::size_t allocation = std::min(page_size * sizeof(T) - page_offset, entry.bytes - bytes_copied);
+                auto* destination = reinterpret_cast<std::byte*>(ptr[current_page]->buffer.data);
+                const auto error = cudaMemcpy(destination + page_offset, data + bytes_copied,
+                    allocation, cudaMemcpyDeviceToDevice);
+                check_cuda(error, "KV cache append failed");
+                bytes_copied += allocation;
+                ++current_page;
+                page_offset = 0;
+            }
         }
 
         Iterator begin() const{
@@ -180,7 +207,6 @@ class PagingCache{
         friend class PagingCache;
     };
 
-    // Allocates up to the requested number of elements from available pages.
     PagedMemory allocate_memory(std::size_t allocation_needed){
         std::size_t pages_need = allocation_needed / page_size + (allocation_needed % page_size != 0);
         std::vector<Page*> storage;
@@ -203,7 +229,6 @@ class PagingCache{
         }
     };
 
-    // Appends pages as needed; returns nullopt if the pool has too few pages.
     std::optional<typename PagedMemory::Iterator> request_memory(PagedMemory& host, std::size_t allocation_size){
         assert(host.owner == this);
 
@@ -227,7 +252,7 @@ class PagingCache{
         }
 
         typename PagedMemory::Iterator result(&host, host.utilization);
-        host.utilization += allocation_size;
+
         return result;
     }
 

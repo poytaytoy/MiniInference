@@ -1,5 +1,6 @@
 # Project preferences
 
+- Put documentation in `docs/` and prioritize code examples to explain behavior and usage.
 - Keep changes small, direct, and limited to the requested work. Preserve existing names, structure, and style where practical.
 - Assume ordinary internal inputs are valid. Avoid excessive defensive validation, numeric-limit checks, and speculative error handling. Keep CUDA API error handling.
 - If a large rework is necessary, stop before starting it, explain why, and discuss the scope with the user.

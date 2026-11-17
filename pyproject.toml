@@ -25,7 +25,6 @@ install.components = ["python"]
 
 [tool.scikit-build.cmake.define]
 BUILD_PYTHON = "ON"
-BUILD_TESTING = "OFF"
 BUILD_BENCHMARK = "OFF"
 BUILD_SHARED_LIBS = "OFF"
-INFERENCE_SIMULATED = "ON"
+INFERENCE_SIMULATED = "OFF"

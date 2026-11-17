@@ -5,6 +5,14 @@
 #include <stdexcept>
 #include <unordered_set>
 
+namespace {
+void check_cuda(cudaError_t error, const char* message) {
+    if (error != cudaSuccess) {
+        throw std::runtime_error(std::string(message) + ": " + cudaGetErrorString(error));
+    }
+}
+}
+
 const char* const Engine::model_path = INFERENCE_MODEL_PATH;
 
 /*static*/ Engine& Engine::start(size_t max_batch_tokens, const std::filesystem::path& file){
@@ -48,8 +56,7 @@ Engine::Engine(const std::filesystem::path& file, size_t max_batch_tokens)
     size_t free_bytes = 0, total_bytes = 0;
     
     const auto error = cudaMemGetInfo(&free_bytes, &total_bytes);
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("GPU memory query failed: ") + cudaGetErrorString(error));
+    check_cuda(error, "GPU memory query failed");
 
     const auto headroom = std::max(free_bytes / 4, size_t{1} << 30);
     const auto budget = free_bytes > headroom ? free_bytes - headroom : 0;
@@ -113,6 +120,7 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
 
         rms_norm(fp(q), weight("attn_q_norm.weight"), fp(q_normalized), tokens * heads, head_dim, epsilon);
         rms_norm(fp(k), weight("attn_k_norm.weight"), fp(k_normalized), tokens * kv_heads, head_dim, epsilon);
+        
         for (size_t entry = 0; entry < batch.size(); ++entry) {
             const auto& [session, count] = batch[entry];
             const auto row = row_starts[entry];
@@ -121,10 +129,7 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
             const auto kv_offset = row * kv_heads * head_dim;
             rope(fp(q_normalized) + q_offset, count, heads, head_dim, offset, rope_base);
             rope(fp(k_normalized) + kv_offset, count, kv_heads, head_dim, offset, rope_base);
-
-            // TODO: paged_attention must handle multiple cache pages per session.
-            // Sessions currently launch separately; a fused multi-session kernel needs
-            // per-session row ranges, context lengths, and page tables.
+            
             paged_attention(fp(q_normalized) + q_offset, fp(k_normalized) + kv_offset,
                 fp(v) + kv_offset, session->get_k(prefix), session->get_v(prefix),
                 fp(attended) + q_offset, count, heads, kv_heads, head_dim, offset);
