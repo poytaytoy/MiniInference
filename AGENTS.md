@@ -1,5 +1,6 @@
 # Project preferences
 
+- Before making any changes to the repository, describe the proposed changes and wait for explicit confirmation from the user.
 - Put documentation in `docs/` and prioritize code examples to explain behavior and usage.
 - Keep changes small, direct, and limited to the requested work. Preserve existing names, structure, and style where practical.
 - Assume ordinary internal inputs are valid. Avoid excessive defensive validation, numeric-limit checks, and speculative error handling. Keep CUDA API error handling.
