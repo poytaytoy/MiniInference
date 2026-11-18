@@ -10,11 +10,13 @@
 #include <vector>
 
 struct ChatSession {
+    static constexpr std::size_t DEFAULT_CONTEXT_LIMIT = 2048;
+
     std::vector<ChatMessage> messages;
     std::vector<uint32_t> tokens;
     std::vector<PagedMemory<float>> cache;
     std::size_t cached_tokens = 0;
-    std::size_t cache_capacity = 2048;
+    std::size_t cache_capacity = DEFAULT_CONTEXT_LIMIT;
 
     std::size_t pending_tokens() const {
         return tokens.size() - cached_tokens;

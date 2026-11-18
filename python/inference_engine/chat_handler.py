@@ -70,7 +70,7 @@ class ChatHandler:
         generated = []
         streamer = _TextChunks(self.tokenizer)
         try:
-            while len(generated) < max_tokens and session.token_count <= session.cache_capacity:
+            while len(generated) < max_tokens:
                 token = await self.next_token(session)
                 generated.append(token)
                 result.completion_tokens = len(generated)

@@ -127,7 +127,12 @@ __global__ void project(const uint8_t* weight, const int8_t* input, const float*
 } // namespace
 
 namespace kernels {
-void matmul(const float* input, const Weight& weight, float* output, size_t rows, cudaStream_t stream) {
+size_t matmul_workspace_bytes(size_t input_elements) {
+    return input_elements + (input_elements / 32) * sizeof(float);
+}
+
+void matmul(const float* input, const Weight& weight, float* output, size_t rows,
+    DeviceBuffer& workspace, cudaStream_t stream) {
     
     if (weight.datatype != GGML_TYPE_Q4_K && weight.datatype != GGML_TYPE_Q6_K)
         throw std::invalid_argument("matmul supports Q4_K and Q6_K weights only");
@@ -140,7 +145,6 @@ void matmul(const float* input, const Weight& weight, float* output, size_t rows
     const size_t columns = weight.dimension[1];
     const size_t count = rows * width;
 
-    DeviceBuffer workspace(count + (count / 32) * sizeof(float), stream);
     auto* codes = static_cast<int8_t*>(workspace.data);
     auto* scales = reinterpret_cast<float*>(codes + count);
 
@@ -160,7 +164,8 @@ void matmul(const float* input, const Weight& weight, float* output, size_t rows
     detail::check_launch();
 
 }
-void matmul(const float* input, const Weight& weight, float* output, size_t rows, const CudaStream& stream) {
-    matmul(input, weight, output, rows, stream.get());
+void matmul(const float* input, const Weight& weight, float* output, size_t rows,
+    DeviceBuffer& workspace, const CudaStream& stream) {
+    matmul(input, weight, output, rows, workspace, stream.get());
 }
 } // namespace kernels

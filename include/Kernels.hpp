@@ -56,11 +56,13 @@ private:
 void rms_norm(const float* input, const Weight& scale, float* output,
     size_t rows, size_t width, float epsilon);
 
-void matmul(const float* input, const Weight& weight, float* output, size_t rows,
-    cudaStream_t stream = nullptr);
+size_t matmul_workspace_bytes(size_t input_elements);
 
 void matmul(const float* input, const Weight& weight, float* output, size_t rows,
-    const CudaStream& stream);
+    DeviceBuffer& workspace, cudaStream_t stream = nullptr);
+
+void matmul(const float* input, const Weight& weight, float* output, size_t rows,
+    DeviceBuffer& workspace, const CudaStream& stream);
 
 void rope(float* input, size_t tokens, size_t heads, size_t head_dim,
     size_t position_offset, float frequency_base);

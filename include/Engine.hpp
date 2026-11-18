@@ -53,6 +53,7 @@ private:
     DeviceBuffer up{size_t{0}};
     DeviceBuffer activated{size_t{0}};
     DeviceBuffer logits{size_t{0}};
+    DeviceBuffer matmul_workspace{size_t{0}};
 
     GGUF gguf;
     EmbedLookup embedlookup;

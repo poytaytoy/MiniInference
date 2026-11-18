@@ -52,6 +52,8 @@ Engine::Engine(const std::filesystem::path& file, size_t max_batch_tokens)
     up = DeviceBuffer(max_batch_tokens_ * ffn_width * sizeof(float));
     activated = DeviceBuffer(max_batch_tokens_ * ffn_width * sizeof(float));
     logits = DeviceBuffer(max_batch_tokens_ * embedlookup.get_vocabulary_size() * sizeof(float));
+    const auto max_matmul_width = std::max({width, heads * head_dim, ffn_width});
+    matmul_workspace = DeviceBuffer(kernels::matmul_workspace_bytes(max_batch_tokens_ * max_matmul_width));
 
     const size_t kv_width = kv_heads * head_dim;
     size_t free_bytes = 0, total_bytes = 0;
@@ -59,7 +61,12 @@ Engine::Engine(const std::filesystem::path& file, size_t max_batch_tokens)
     const auto error = cudaMemGetInfo(&free_bytes, &total_bytes);
     check_cuda(error, "GPU memory query failed");
 
-    const auto budget = free_bytes - free_bytes / 4;
+    const auto minimum_budget = 2 * PagingCache<float>::bytes_for_context(
+        ChatSession::DEFAULT_CONTEXT_LIMIT, layer_count, kv_width);
+    if (free_bytes < minimum_budget) {
+        throw std::runtime_error("Insufficient free GPU memory to fit two full contexts in the KV cache");
+    }
+    const auto budget = std::max(free_bytes - free_bytes / 4, minimum_budget);
     kv_cache_pool = std::make_unique<PagingCache<float>>(kv_width, budget);
 
     const auto eos = gguf.get_eos_token_id();
@@ -109,9 +116,9 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
         auto weight = [&](const char* name) -> const Weight& { return weights.at(prefix + name); };
 
         rms_norm(fp(token_buffer), weight("attn_norm.weight"), fp(normalized), tokens, width, epsilon);
-        matmul(fp(normalized), weight("attn_q.weight"), fp(q), tokens);
-        matmul(fp(normalized), weight("attn_k.weight"), fp(k), tokens);
-        matmul(fp(normalized), weight("attn_v.weight"), fp(v), tokens);
+        matmul(fp(normalized), weight("attn_q.weight"), fp(q), tokens, matmul_workspace);
+        matmul(fp(normalized), weight("attn_k.weight"), fp(k), tokens, matmul_workspace);
+        matmul(fp(normalized), weight("attn_v.weight"), fp(v), tokens, matmul_workspace);
 
         rms_norm(fp(q), weight("attn_q_norm.weight"), fp(q_normalized), tokens * heads, head_dim, epsilon);
         rms_norm(fp(k), weight("attn_k_norm.weight"), fp(k_normalized), tokens * kv_heads, head_dim, epsilon);
@@ -134,20 +141,20 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
                 fp(attended) + q_offset, count, heads, kv_heads, head_dim, offset);
         }
 
-        matmul(fp(attended), weight("attn_output.weight"), fp(branch), tokens);
+        matmul(fp(attended), weight("attn_output.weight"), fp(branch), tokens, matmul_workspace);
         residual_add(fp(token_buffer), fp(branch), tokens * width);
 
         rms_norm(fp(token_buffer), weight("ffn_norm.weight"), fp(normalized), tokens, width, epsilon);
-        matmul(fp(normalized), weight("ffn_gate.weight"), fp(gate), tokens);
-        matmul(fp(normalized), weight("ffn_up.weight"), fp(up), tokens);
+        matmul(fp(normalized), weight("ffn_gate.weight"), fp(gate), tokens, matmul_workspace);
+        matmul(fp(normalized), weight("ffn_up.weight"), fp(up), tokens, matmul_workspace);
         silu_multiply(fp(gate), fp(up), fp(activated), tokens * ffn_width);
-        matmul(fp(activated), weight("ffn_down.weight"), fp(branch), tokens);
+        matmul(fp(activated), weight("ffn_down.weight"), fp(branch), tokens, matmul_workspace);
         residual_add(fp(token_buffer), fp(branch), tokens * width);
     }
 
     rms_norm(fp(token_buffer), weights.at("output_norm.weight"),
         fp(normalized), tokens, width, epsilon);
-    matmul(fp(normalized), weights.at("token_embd.weight"), fp(logits), tokens);
+    matmul(fp(normalized), weights.at("token_embd.weight"), fp(logits), tokens, matmul_workspace);
     
     return argmax(fp(logits), embedlookup.get_vocabulary_size(), tokens);
 #endif

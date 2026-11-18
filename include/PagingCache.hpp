@@ -107,6 +107,11 @@ class PagingCache{
 
     public:
 
+    static std::size_t bytes_for_context(std::size_t tokens, std::size_t layer_count, std::size_t kv_width) {
+        const auto pages_per_layer = (tokens + TOKENS_PER_PAGE - 1) / TOKENS_PER_PAGE;
+        return pages_per_layer * layer_count * TOKENS_PER_PAGE * kv_width * 2 * sizeof(T);
+    }
+
     PagingCache(std::size_t kv_width, std::size_t budget_bytes):
         page_size{TOKENS_PER_PAGE * kv_width},
         num_of_pages{budget_bytes / (2 * page_size * sizeof(T))},
