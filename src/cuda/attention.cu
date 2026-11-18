@@ -19,15 +19,20 @@ __device__ float warp_max(float value) {
     return __shfl_sync(0xffffffffu, value, 0);
 }
 
-__global__ void attention_kernel(const float* q, PagedIterator<float> k, PagedIterator<float> v,
-    float* output, size_t query_heads, size_t kv_heads, size_t head_dim, size_t query_offset) {
+__global__ void attention_kernel(const float* q, float* output,
+    const kernels::AttentionSequence* sequences, const size_t* row_to_sequence,
+    size_t query_heads, size_t kv_heads, size_t head_dim) {
     __shared__ float scores[key_tile_rows];
     __shared__ float weights[key_tile_rows];
     __shared__ float previous_scale;
     __shared__ float normalizer;
 
     const size_t query_row = blockIdx.x;
-    const size_t position = query_offset + query_row / query_heads;
+    const size_t token_row = query_row / query_heads;
+    const auto& sequence = sequences[row_to_sequence[token_row]];
+    const auto k = sequence.keys;
+    const auto v = sequence.values;
+    const size_t position = sequence.position_offset + (token_row - sequence.first_row);
     const size_t head = query_row % query_heads;
     const size_t kv_head = head / (query_heads / kv_heads);
     const size_t kv_width = kv_heads * head_dim;
@@ -91,8 +96,8 @@ __global__ void attention_kernel(const float* q, PagedIterator<float> k, PagedIt
 } // namespace
 
 namespace kernels {
-void attention(const float* q, PagedIterator<float> k, PagedIterator<float> v, float* output,
-    size_t tokens, size_t query_heads, size_t kv_heads, size_t head_dim, size_t query_offset) {
+void attention(const float* q, float* output, const AttentionSequence* sequences,
+    const size_t* row_to_sequence, size_t tokens, size_t query_heads, size_t kv_heads, size_t head_dim) {
     if (tokens == 0) return;
     if (!q || !output || kv_heads == 0 || query_heads == 0 ||
         query_heads % kv_heads != 0 || head_dim == 0 || head_dim > 256) {
@@ -100,7 +105,7 @@ void attention(const float* q, PagedIterator<float> k, PagedIterator<float> v, f
     }
 
     attention_kernel<<<tokens * query_heads, attention_threads>>>(
-        q, k, v, output, query_heads, kv_heads, head_dim, query_offset);
+        q, output, sequences, row_to_sequence, query_heads, kv_heads, head_dim);
     detail::check_launch();
 }
 } // namespace kernels

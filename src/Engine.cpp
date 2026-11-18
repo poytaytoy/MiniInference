@@ -47,6 +47,8 @@ Engine::Engine(const std::filesystem::path& file, size_t max_batch_tokens)
     v = DeviceBuffer(max_batch_tokens_ * kv_heads * head_dim * sizeof(float));
     q_normalized = DeviceBuffer(max_batch_tokens_ * heads * head_dim * sizeof(float));
     attended = DeviceBuffer(max_batch_tokens_ * heads * head_dim * sizeof(float));
+    attention_sequences = DeviceBuffer(layer_count * max_batch_tokens_ * sizeof(kernels::AttentionSequence));
+    attention_row_map = DeviceBuffer(max_batch_tokens_ * sizeof(size_t));
     branch = DeviceBuffer(max_batch_tokens_ * width * sizeof(float));
     gate = DeviceBuffer(max_batch_tokens_ * ffn_width * sizeof(float));
     up = DeviceBuffer(max_batch_tokens_ * ffn_width * sizeof(float));
@@ -98,15 +100,37 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
 #else
     using namespace kernels;
     std::vector<size_t> row_starts;
+    std::vector<size_t> row_to_sequence;
+    std::vector<size_t> prediction_rows;
     std::vector<uint32_t> pending;
     std::unordered_set<ChatSession*> seen;
     size_t tokens = 0;
     for (const auto& [session, count] : batch) {
+        row_to_sequence.insert(row_to_sequence.end(), count, row_starts.size());
         row_starts.push_back(tokens);
         tokens += count;
+        if (count == session->pending_tokens()) {
+            prediction_rows.push_back(tokens - 1);
+        }
         pending.insert(pending.end(), session->tokens.begin() + session->cached_tokens,session->tokens.begin() + session->cached_tokens + count);
     }
     if (batch.empty()) return {};
+
+    // Page tables already exist for every layer, so upload the metadata once per batch.
+    std::vector<AttentionSequence> sequences;
+    sequences.reserve(layer_count * batch.size());
+    for (size_t layer = 0; layer < layer_count; ++layer) {
+        for (size_t entry = 0; entry < batch.size(); ++entry) {
+            const auto* session = batch[entry].first;
+            const auto& cache = session->cache[layer];
+            sequences.push_back({cache.key_begin(), cache.value_begin(),
+                row_starts[entry], session->cached_tokens});
+        }
+    }
+    check_cuda(cudaMemcpy(attention_sequences.data, sequences.data(),
+        sequences.size() * sizeof(AttentionSequence), cudaMemcpyHostToDevice), "Attention metadata upload failed");
+    check_cuda(cudaMemcpy(attention_row_map.data, row_to_sequence.data(),
+        row_to_sequence.size() * sizeof(size_t), cudaMemcpyHostToDevice), "Attention row map upload failed");
 
     embedlookup.lookup(pending, token_buffer, embedding_rows);
     auto fp = [](DeviceBuffer& buffer) { return static_cast<float*>(buffer.data); };
@@ -137,9 +161,10 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
             const auto entry_bytes = count * kv_heads * head_dim * sizeof(float);
             cache.append_entry(DeviceBufferView{fp(k_normalized) + kv_offset, entry_bytes},
                 DeviceBufferView{fp(v) + kv_offset, entry_bytes}, cache_offset);
-            attention(fp(q_normalized) + q_offset, cache.key_begin(), cache.value_begin(),
-                fp(attended) + q_offset, count, heads, kv_heads, head_dim, offset);
         }
+        attention(fp(q_normalized), fp(attended),
+            static_cast<const AttentionSequence*>(attention_sequences.data) + i * batch.size(),
+            static_cast<const size_t*>(attention_row_map.data), tokens, heads, kv_heads, head_dim);
 
         matmul(fp(attended), weight("attn_output.weight"), fp(branch), tokens, matmul_workspace);
         residual_add(fp(token_buffer), fp(branch), tokens * width);
@@ -152,10 +177,37 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
         residual_add(fp(token_buffer), fp(branch), tokens * width);
     }
 
-    rms_norm(fp(token_buffer), weights.at("output_norm.weight"),
-        fp(normalized), tokens, width, epsilon);
-    matmul(fp(normalized), weights.at("token_embd.weight"), fp(logits), tokens, matmul_workspace);
-    
-    return argmax(fp(logits), embedlookup.get_vocabulary_size(), tokens);
+    // generates predictions only on decode batch entries 
+    const auto prediction_count = prediction_rows.size();
+    if (prediction_count == 0) {
+        check_cuda(cudaStreamSynchronize(nullptr), "Prefill batch synchronization failed");
+        return std::vector<uint32_t>(tokens);
+    }
+
+    const float* output_rows = fp(token_buffer);
+    if (prediction_count != tokens) {
+        // The branch buffer is free after the final residual add.
+        auto* gathered = fp(branch);
+        for (size_t i = 0; i < prediction_count; ++i) {
+            check_cuda(cudaMemcpyAsync(gathered + i * width, output_rows + prediction_rows[i] * width,
+                width * sizeof(float), cudaMemcpyDeviceToDevice, nullptr), "Prediction row copy failed");
+        }
+        output_rows = gathered;
+    }
+
+    rms_norm(output_rows, weights.at("output_norm.weight"), fp(normalized),
+        prediction_count, width, epsilon);
+    matmul(fp(normalized), weights.at("token_embd.weight"), fp(logits), prediction_count, matmul_workspace);
+    auto predictions = argmax(fp(logits), embedlookup.get_vocabulary_size(), prediction_count);
+    if (prediction_count == tokens) {
+        return predictions;
+    }
+
+    // TaskManager reads only the last row of each completed entry.
+    std::vector<uint32_t> results(tokens);
+    for (size_t i = 0; i < prediction_count; ++i) {
+        results[prediction_rows[i]] = predictions[i];
+    }
+    return results;
 #endif
 }

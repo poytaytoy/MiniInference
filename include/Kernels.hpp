@@ -67,9 +67,15 @@ void matmul(const float* input, const Weight& weight, float* output, size_t rows
 void rope(float* input, size_t tokens, size_t heads, size_t head_dim,
     size_t position_offset, float frequency_base);
 
-void attention(const float* q, PagedIterator<float> k, PagedIterator<float> v, float* output,
-    size_t tokens, size_t query_heads, size_t kv_heads, size_t head_dim,
-    size_t query_offset = 0);
+struct AttentionSequence {
+    PagedIterator<float> keys;
+    PagedIterator<float> values;
+    size_t first_row;
+    size_t position_offset;
+};
+
+void attention(const float* q, float* output, const AttentionSequence* sequences,
+    const size_t* row_to_sequence, size_t tokens, size_t query_heads, size_t kv_heads, size_t head_dim);
 
 void residual_add(float* state, const float* branch, size_t count);
 

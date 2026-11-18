@@ -48,6 +48,8 @@ private:
     DeviceBuffer v{size_t{0}};
     DeviceBuffer q_normalized{size_t{0}};
     DeviceBuffer attended{size_t{0}};
+    DeviceBuffer attention_sequences{size_t{0}};
+    DeviceBuffer attention_row_map{size_t{0}};
     DeviceBuffer branch{size_t{0}};
     DeviceBuffer gate{size_t{0}};
     DeviceBuffer up{size_t{0}};
