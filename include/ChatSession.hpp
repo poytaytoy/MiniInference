@@ -1,30 +1,18 @@
 #pragma once
 #include "ChatMessage.hpp"
 #include "PagingCache.hpp"
+#include <algorithm>
 #include <cstddef>
 #include <memory>
-#include <unordered_map>
+#include <new>
+#include <optional>
 #include <stdexcept>
-#include <string>
 #include <vector>
 
 struct ChatSession {
-    struct CacheEntry {
-        std::unique_ptr<PagedMemory<float>> key;
-        std::unique_ptr<PagedMemory<float>> value;
-
-        std::size_t gpu_allocated_key_tokens{0};
-        std::size_t gpu_allocated_value_tokens{0};
-
-        CacheEntry(PagingCache<float>& pool)
-            : key(std::make_unique<PagedMemory<float>>(pool.allocate_memory(0))),
-              value(std::make_unique<PagedMemory<float>>(pool.allocate_memory(0))) {}
-    };
-
     std::vector<ChatMessage> messages;
     std::vector<uint32_t> tokens;
-    std::unordered_map<std::string, CacheEntry> cache;
-    std::size_t kv_width = 0;
+    std::vector<PagedMemory<float>> cache;
     std::size_t cached_tokens = 0;
     std::size_t cache_capacity = 2048;
 
@@ -32,42 +20,38 @@ struct ChatSession {
         return tokens.size() - cached_tokens;
     }
 
-    CacheEntry* update_cache(const std::string& name, PagingCache<float>& pool,
-        std::size_t new_tokens) {
-        auto [it, inserted] = cache.try_emplace(name, pool);
-        auto& entry = it->second;
-        auto unavailable = [&]() -> CacheEntry* {
-            if (inserted) cache.erase(it);
-            return nullptr;
-        };
-        const auto required_tokens = cached_tokens + new_tokens;
-        if (required_tokens > cache_capacity)
+    std::optional<std::size_t> update_cache(PagingCache<float>& pool, std::size_t layer_count,
+        std::size_t budget) {
+        if (tokens.size() > cache_capacity) {
             throw std::out_of_range("KV cache capacity exceeded");
-
-        if (required_tokens > entry.gpu_allocated_key_tokens) {
-            if (!pool.request_memory(*entry.key, (required_tokens - entry.gpu_allocated_key_tokens) * kv_width))
-                return unavailable();
-            entry.gpu_allocated_key_tokens = required_tokens;
         }
-        
-        if (required_tokens > entry.gpu_allocated_value_tokens) {
-            if (!pool.request_memory(*entry.value, (required_tokens - entry.gpu_allocated_value_tokens) * kv_width))
-                return unavailable();
-            entry.gpu_allocated_value_tokens = required_tokens;
+        if (cache.empty()) {
+            cache.reserve(layer_count);
+            for (std::size_t layer = 0; layer < layer_count; ++layer) {
+                cache.emplace_back(pool);
+            }
         }
-        return &entry;
-    }
 
-    PagedMemory<float>& get_k(const std::string& name){
-        return *cache.at(name).key; 
-    }
+        const auto prefix = pool.request_memory(cache, tokens, cached_tokens, budget);
+        if (!prefix) return std::nullopt;
 
-    PagedMemory<float>& get_v(const std::string& name){
-        return *cache.at(name).value; 
+        cached_tokens = *prefix;
+        return std::min(budget, pending_tokens());
     }
 
     ChatSession() = default;
-    ~ChatSession() = default;
+    ~ChatSession() {
+        if (cached_tokens == 0 || cache.empty()) return;
+        try {
+            const auto end = tokens.begin() + std::min(cached_tokens, tokens.size());
+            const auto prefix = std::make_shared<const std::vector<uint32_t>>(tokens.begin(), end);
+            for (std::size_t layer = 0; layer < cache.size(); ++layer) {
+                cache[layer].set_cache_keys(prefix, layer);
+            }
+        } catch (const std::bad_alloc&) {
+            // Cache keys are optional. The page owners still return their pages.
+        }
+    }
     ChatSession(const ChatSession&) = delete;
     ChatSession& operator=(const ChatSession&) = delete;
     ChatSession(ChatSession&&) noexcept = default;

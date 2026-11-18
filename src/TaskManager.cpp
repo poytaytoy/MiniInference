@@ -101,18 +101,13 @@ void TaskManager::process() {
                 finish(task);
                 continue;
             }
-            const auto count = std::min(pending, budget);
+            std::size_t count;
             try {
-                auto& session = *task.session;
-                if (session.kv_width == 0) {
-                    session.kv_width = engine.kv_heads * engine.head_dim;
+                const auto reserved = task.session->update_cache(*engine.kv_cache_pool, engine.layer_count, budget);
+                if (!reserved) {
+                    throw std::bad_alloc{};
                 }
-                // implies we do not have the cache for it at this moment, it should be queud for later
-                for (size_t i = 0; i < engine.layer_count; ++i) {
-                    if (!session.update_cache(std::format("blk.{}.", i), *engine.kv_cache_pool, count)) {
-                        throw std::bad_alloc{};
-                    }
-                }
+                count = *reserved;
             } catch (const std::bad_alloc&) {
                 push_back(task);
                 continue;

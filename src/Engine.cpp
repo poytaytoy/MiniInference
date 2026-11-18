@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <format>
 #include <stdexcept>
+#include <cassert>
 #include <unordered_set>
 
 namespace {
@@ -125,15 +126,12 @@ std::vector<uint32_t> Engine::inference(const std::vector<BatchEntry>& batch) {
             rope(fp(q_normalized) + q_offset, count, heads, head_dim, offset, rope_base);
             rope(fp(k_normalized) + kv_offset, count, kv_heads, head_dim, offset, rope_base);
             
-            auto& cached_k = session->get_k(prefix);
-            auto& cached_v = session->get_v(prefix);
+            auto& cache = session->cache[i];
             const auto cache_offset = offset * kv_heads * head_dim;
             const auto entry_bytes = count * kv_heads * head_dim * sizeof(float);
-            const auto entry_tokens = std::span<const uint32_t>{pending}.subspan(row, count);
-            cached_k.append_entry(DeviceBufferView{fp(k_normalized) + kv_offset, entry_bytes}, cache_offset, entry_tokens);
-            
-            cached_v.append_entry(DeviceBufferView{fp(v) + kv_offset, entry_bytes}, cache_offset, entry_tokens);
-            attention(fp(q_normalized) + q_offset, cached_k.begin(), cached_v.begin(),
+            cache.append_entry(DeviceBufferView{fp(k_normalized) + kv_offset, entry_bytes},
+                DeviceBufferView{fp(v) + kv_offset, entry_bytes}, cache_offset);
+            attention(fp(q_normalized) + q_offset, cache.key_begin(), cache.value_begin(),
                 fp(attended) + q_offset, count, heads, kv_heads, head_dim, offset);
         }
 
