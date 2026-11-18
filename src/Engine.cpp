@@ -59,8 +59,7 @@ Engine::Engine(const std::filesystem::path& file, size_t max_batch_tokens)
     const auto error = cudaMemGetInfo(&free_bytes, &total_bytes);
     check_cuda(error, "GPU memory query failed");
 
-    const auto headroom = std::max(free_bytes / 4, size_t{1} << 30);
-    const auto budget = free_bytes > headroom ? free_bytes - headroom : 0;
+    const auto budget = free_bytes - free_bytes / 4;
     kv_cache_pool = std::make_unique<PagingCache<float>>(kv_width, budget);
 
     const auto eos = gguf.get_eos_token_id();
