@@ -20,6 +20,11 @@ Use `--model` and `--tokenizer` to select different model files.
 
 ## Connect
 
+    const auto minimum_budget = 2 * PagingCache<float>::bytes_for_context(
+        ChatSession::DEFAULT_CONTEXT_LIMIT, layer_count, kv_width);
+    if (free_bytes < minimum_budget) {
+        throw std::runtime_error("Insufficient free GPU memory to fit two full contexts in the KV cache");
+    }
 Use the OpenAI Python SDK or another OpenAI-compatible client library with
 `http://127.0.0.1:8080/v1` as its base URL. Both streaming and complete responses
 are supported. Interactive API documentation is available at

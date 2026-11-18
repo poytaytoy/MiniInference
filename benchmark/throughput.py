@@ -1,28 +1,43 @@
-"""Measure aggregate throughput with concurrent HTTP requests."""
+"""Run the eight-user GuideLLM benchmark against the local inference server."""
 
-from concurrent.futures import ThreadPoolExecutor
-from time import perf_counter
-
-from client import parser, positive_int, print_latency, request
-
-
-def main():
-    options = parser(__doc__)
-    options.add_argument("--concurrency", type=positive_int, default=4)
-    args = options.parse_args()
-
-    request(args, stream=False)
-    with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
-        start = perf_counter()
-        futures = [executor.submit(request, args, stream=False) for _ in range(args.requests)]
-        results = [future.result() for future in futures]
-        elapsed = perf_counter() - start
-
-    completions = sum(result.completion_tokens for result in results)
-    print(f"{len(results)} requests in {elapsed:.2f} s at concurrency {args.concurrency}")
-    print(f"{len(results) / elapsed:.2f} requests/s, {completions / elapsed:.2f} completion tokens/s")
-    print_latency("Response latency", (result.seconds for result in results))
+import os
+from pathlib import Path
+import sys
 
 
 if __name__ == "__main__":
-    main()
+    benchmark_env = Path(__file__).resolve().parent / ".venv"
+    if Path(sys.prefix).resolve() != benchmark_env:
+        python = benchmark_env / "bin" / "python"
+        os.execv(python, [str(python), __file__])
+
+from guidellm.backends.openai.request_handlers import (
+    ChatCompletionsRequestHandler,
+    OpenAIRequestHandlerFactory,
+)
+from guidellm.cli import cli
+
+
+class TextOnlyChatHandler(ChatCompletionsRequestHandler):
+    def format(self, *args, **kwargs):
+        request = super().format(*args, **kwargs)
+        for message in request.body["messages"]:
+            content = message["content"]
+            if isinstance(content, list):
+                message["content"] = "".join(part["text"] for part in content)
+        return request
+
+
+OpenAIRequestHandlerFactory.registry["/v1/chat/completions"] = TextOnlyChatHandler
+
+if __name__ == "__main__":
+    cli([
+        "run",
+        "--backend",
+        "kind=openai_http,target=http://127.0.0.1:8080,"
+        "request_format=/v1/chat/completions,validate_backend=false",
+        "--tokenizer", "kind=huggingface_auto,model=Qwen/Qwen3-4B",
+        "--data", "kind=synthetic_text,prompt_tokens=128,output_tokens=64",
+        "--profile", "kind=concurrent,streams=8",
+        "--constraint", "kind=max_requests,count=40",
+    ])

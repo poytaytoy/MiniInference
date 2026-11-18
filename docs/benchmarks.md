@@ -1,29 +1,23 @@
-# HTTP benchmarks
+# HTTP throughput benchmark
 
-Start the inference server, then run these commands from the repository root.
-The scripts use the Python standard library and default to
-`http://127.0.0.1:8080`.
+With the engine running on port 8080, run this from the repository root.
 
 ```sh
-# Streaming response latency and time to first visible text
-python benchmark/latency.py --requests 20 --max-tokens 64
-
-# Complete JSON response latency
-python benchmark/latency.py --non-streaming --requests 20
-
-# Aggregate completion tokens/s and requests/s at four-way concurrency
-python benchmark/throughput.py --requests 40 --concurrency 4
+python benchmark/throughput.py
 ```
 
-Set `--url` to benchmark another server address. Set `--prompt` to use a
-longer prompt, and add `--unique-prompts` to vary the early token prefix
-between requests. The default workload repeats the same prompt and allows
-prefix reuse. A useful comparison uses the same long base prompt in both
-modes. The unique request ID changes tokenization, so compare the prompt
-token counts reported by the latency script as well.
+GuideLLM sends 40 streaming chat requests with up to eight in flight. Each
+request uses a synthetic prompt targeting 128 input tokens and requests up to
+64 output tokens. The server applies the chat template and may stop at EOS.
+GuideLLM reports request throughput, output tokens per second, and streaming
+latency. The inference engine does the GPU work.
 
-Time to first text starts at HTTP request submission and ends at the first
-nonempty content event. It includes server scheduling, prompt processing,
-and detokenization. Streaming response latency ends at `[DONE]`. Throughput
-uses actual completion token counts over the full timed batch, including
-prefill and HTTP overhead.
+To set up the benchmark environment on a fresh checkout:
+
+```sh
+uv venv --python 3.12 benchmark/.venv
+uv pip install --python benchmark/.venv/bin/python guidellm --torch-backend=cpu
+```
+
+GuideLLM uses the `Qwen/Qwen3-4B` tokenizer and may download its files on the
+first run.
