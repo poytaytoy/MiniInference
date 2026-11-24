@@ -2,30 +2,23 @@
 
 import argparse
 from datetime import datetime
-import os
 from pathlib import Path
 import shlex
 import socket
 import subprocess
-import sys
 from tempfile import mkdtemp
 from time import monotonic, sleep
 from urllib.request import urlopen
 
-
-BENCHMARK_DIR = Path(__file__).resolve().parent
-
-if __name__ == "__main__":
-    benchmark_env = BENCHMARK_DIR / ".venv"
-    if Path(sys.prefix).resolve() != benchmark_env:
-        python = benchmark_env / "bin" / "python"
-        os.execv(python, [str(python), *sys.argv])
 
 from guidellm.backends.openai.request_handlers import (
     ChatCompletionsRequestHandler,
     OpenAIRequestHandlerFactory,
 )
 from guidellm.cli import cli
+
+
+BENCHMARK_DIR = Path(__file__).resolve().parent
 
 
 class TextOnlyChatHandler(ChatCompletionsRequestHandler):
@@ -50,7 +43,10 @@ def make_output_dir():
     return output_dir
 
 
-def run_benchmark(args, output_dir):
+def run_case(args, output_dir, concurrency):
+    case_dir = output_dir / f"concurrency-{concurrency}"
+    case_dir.mkdir()
+    print(f"Running {args.requests} requests at concurrency {concurrency}", flush=True)
     cli([
         "run",
         "--backend",
@@ -58,11 +54,17 @@ def run_benchmark(args, output_dir):
         "request_format=/v1/chat/completions,validate_backend=false",
         "--tokenizer", "kind=huggingface_auto,model=Qwen/Qwen3-4B",
         "--data", f"kind=synthetic_text,prompt_tokens={args.input_tokens},output_tokens={args.max_tokens}",
-        "--profile", f"kind=concurrent,streams={args.concurrency}",
+        "--profile", f"kind=concurrent,streams={concurrency}",
         "--constraint", f"kind=max_requests,count={args.requests}",
-        "--output", f"kind=json,path={output_dir / 'benchmarks.json'}",
-        "--output", f"kind=csv,path={output_dir / 'benchmarks.csv'}",
+        "--output", f"kind=json,path={case_dir / 'benchmarks.json'}",
+        "--output", f"kind=csv,path={case_dir / 'benchmarks.csv'}",
     ], standalone_mode=False)
+
+
+def run_benchmark(args, output_dir):
+    run_case(args, output_dir, 1)
+    if args.concurrency != 1:
+        run_case(args, output_dir, args.concurrency)
 
 
 def wait_for_server(server, log_path):
@@ -116,7 +118,10 @@ def profile_benchmark(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument(
+        "--concurrency", type=int, default=8,
+        help="concurrency of the second run (1 runs only the baseline)",
+    )
     parser.add_argument("--requests", type=int, default=40)
     parser.add_argument("--input-tokens", type=int, default=128)
     parser.add_argument("--max-tokens", type=int, default=64)

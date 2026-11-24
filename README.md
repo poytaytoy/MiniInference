@@ -2,10 +2,25 @@
 
 A C++/CUDA inference engine for Qwen3 with an OpenAI-compatible Python API.
 
+## Benchmark results
+
+Measured on an NVIDIA GeForce RTX 4060 Laptop GPU with
+`Qwen3-4B-Q4_K_M.gguf`, a 64-token batch budget, and Nsight tracing enabled.
+The server reported 140 input tokens and 64 output tokens per request. All
+40 requests completed in each case with zero errors.
+
+| Concurrent requests | Run duration | Average time to first token | Average decode tokens/s per request | Aggregate output tokens/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 93.8 s | 1.17 s | 53.9 | 27.3 |
+| 8 | 76.9 s | 3.74 s | 5.6 | 33.3 |
+
+Per-request decode speed measures the tokens after the first output token.
+Aggregate throughput includes time spent waiting for the first token.
+
+## Run the server
+
 Requires Python 3.10+, uv, CMake 3.25+, Ninja, a CUDA-capable C++20 compiler,
 OpenMP, the CUDA toolkit, and an NVIDIA GPU.
-
-## Run
 
 ```sh
 git submodule update --init third_party/ggml third_party/json
@@ -20,11 +35,6 @@ Use `--model` and `--tokenizer` to select different model files.
 
 ## Connect
 
-    const auto minimum_budget = 2 * PagingCache<float>::bytes_for_context(
-        ChatSession::DEFAULT_CONTEXT_LIMIT, layer_count, kv_width);
-    if (free_bytes < minimum_budget) {
-        throw std::runtime_error("Insufficient free GPU memory to fit two full contexts in the KV cache");
-    }
 Use the OpenAI Python SDK or another OpenAI-compatible client library with
 `http://127.0.0.1:8080/v1` as its base URL. Both streaming and complete responses
 are supported. Interactive API documentation is available at
@@ -41,21 +51,26 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-## Generation performance
+## Run the benchmark
 
-Using an NVIDIA GeForce RTX 4060 Laptop GPU and
-`Qwen3-4B-Q4_K_M.gguf`. The results are as follows: 
+The `benchmark/` directory is a standalone uv project. It uses Python 3.12+
+and keeps GuideLLM in its own environment.
 
-Prompt: "Explain what a GPU does in a few sentences." (23 prompt tokens).
+With the inference server running on port 8080:
 
-| Run | First token | Generated tokens/s afterwards |
-| --- | ---: | ---: |
-| 1 | 178.202 ms | 62.105 |
-| 2 | 190.730 ms | 60.751 |
-| 3 | 190.578 ms | 62.115 |
-| Average | 186.504 ms | 61.650 |
+```sh
+uv run --project benchmark python benchmark/benchmark.py
+```
 
-## TODO
+To let the benchmark launch the installed server and capture an Nsight Systems
+trace, stop any server on port 8080 and run:
 
-- Implement paged attention.
-- Implement CUDA Graphs.
+```sh
+uv run --project benchmark python benchmark/benchmark.py --profile
+```
+
+The benchmark sends 40 requests at concurrency 1, then 40 at concurrency 8
+with the same synthetic prompt and output lengths. Use `--concurrency` to
+change the second run, or set it to 1 to run only the baseline. The benchmark
+prints its output directory under `benchmark/results/`. Both cases get separate
+reports and `--profile` adds a shared Nsight trace.
