@@ -5,3 +5,5 @@ assets/models/*
 .venv/
 __pycache__/
 *.egg-info/
+
+benchmark/results

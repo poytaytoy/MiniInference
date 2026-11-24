@@ -25,7 +25,7 @@ public:
 
     
 private:
-    friend class TaskManager;
+    friend class Scheduler;
 
     static const char* const model_path;
 

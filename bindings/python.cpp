@@ -48,6 +48,7 @@ PYBIND11_MODULE(_inference_engine, module) {
                 ++matched;
             }
             session.cached_tokens = matched;
+            session.prefill_complete = false;
             session.tokens = std::move(tokens);
         })
         .def_property_readonly("token_count", [](const ChatSession& session) { return session.tokens.size(); })

@@ -1,13 +1,11 @@
 #pragma once
 
-#include "Engine.hpp"
+#include "Scheduler.hpp"
 #include <condition_variable>
-#include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <vector>
 
 struct TaskOutput {
     // Readers must hold this mutex when accessing token, finished, or error.
@@ -28,24 +26,14 @@ public:
     void submit(std::shared_ptr<ChatSession> session, std::shared_ptr<TaskOutput> output);
 
 private:
-    struct Task {
-        std::shared_ptr<ChatSession> session;
-        std::shared_ptr<TaskOutput> output;
-    };
-
-    size_t wait_for_tasks();
-    Task pop();
-    void push_back(Task& task);
-    void wait_for_retry();
     void process();
-    void finish(Task& task, std::exception_ptr error = {});
-    void finish_pending(std::exception_ptr error);
+    void finish(const Scheduler::Result& result);
 
-    Engine& engine;
+    Scheduler scheduler;
     std::mutex queue_mutex;
 
     std::condition_variable available;
-    std::deque<Task> queue;
+    Scheduler::Queue queue;
     
     bool stopping{false};
     std::thread worker;

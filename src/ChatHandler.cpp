@@ -56,6 +56,7 @@ void ChatHandler::prepare(const std::shared_ptr<ChatSession>& session,
         ++matched;
     }
     session->cached_tokens = matched;
+    session->prefill_complete = false;
     session->tokens = std::move(input);
     session->messages = std::move(messages);
 }

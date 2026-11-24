@@ -4,18 +4,12 @@
 #include "ManagedAllocator.hpp"
 #include <algorithm>
 #include <cstddef>
-#include <cstdint>
-#include <functional>
-#include <list>
 #include <memory>
 #include <mutex>
 #include <new>
-#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -31,71 +25,6 @@ class PagingCache{
 
     struct Page{
         DeviceBufferView buffer;
-        std::string cache_key{};
-        std::size_t layer = 0;
-        std::shared_ptr<const std::vector<uint32_t>> cached_tokens;
-        std::size_t prefix_size = 0;
-        typename std::list<Page*>::iterator free_position;
-
-        static std::string hash_key(std::span<const uint32_t> tokens) {
-            const std::string_view bytes{reinterpret_cast<const char*>(tokens.data()), tokens.size_bytes()};
-            return std::to_string(std::hash<std::string_view>{}(bytes));
-        }
-
-        void make_hash_key(std::span<const uint32_t> tokens) {
-            cache_key = hash_key(tokens);
-        }
-    };
-
-    class FreePageQueue {
-        std::list<Page*> free_pages;
-        std::unordered_multimap<std::string, Page*> cached_pages;
-
-    public:
-        // The pool holds free_pages_mutex across queue operations.
-        std::size_t size() const {
-            return free_pages.size();
-        }
-
-        Page* find(const std::string& key, std::span<const uint32_t> prefix, std::size_t layer) const {
-            const auto [first, last] = cached_pages.equal_range(key);
-            const auto entry = std::find_if(first, last, [&](const auto& cached) {
-                const auto* page = cached.second;
-                return page->layer == layer && page->prefix_size == prefix.size() &&
-                    std::equal(prefix.begin(), prefix.end(), page->cached_tokens->begin());
-            });
-            return entry == last ? nullptr : entry->second;
-        }
-
-        void push(Page* page) {
-            page->free_position = free_pages.insert(free_pages.end(), page);
-            if (!page->cache_key.empty()) {
-                try {
-                    cached_pages.emplace(page->cache_key, page);
-                } catch (const std::bad_alloc&) {
-                    page->cache_key.clear();
-                    page->cached_tokens.reset();
-                }
-            }
-        }
-
-        void take(Page* page) {
-            free_pages.erase(page->free_position);
-            const auto [first, last] = cached_pages.equal_range(page->cache_key);
-            const auto entry = std::find_if(first, last,
-                [page](const auto& cached) { return cached.second == page; });
-            if (entry != last) {
-                cached_pages.erase(entry);
-            }
-            page->cache_key.clear();
-            page->cached_tokens.reset();
-        }
-
-        Page* pop() {
-            auto* page = free_pages.front();
-            take(page);
-            return page;
-        }
     };
 
     std::vector<std::unique_ptr<Page>> pages;
@@ -103,7 +32,7 @@ class PagingCache{
     std::size_t num_of_pages;
     DeviceBuffer buffer;
     std::mutex free_pages_mutex;
-    FreePageQueue free_pages;
+    std::vector<Page*> free_pages;
 
     public:
 
@@ -120,13 +49,14 @@ class PagingCache{
                 throw std::runtime_error("Insufficient free GPU memory for KV cache pool");
             }
             pages.reserve(num_of_pages);
+            free_pages.reserve(num_of_pages);
             T* ptr = static_cast<T*>(buffer.data);
             for (std::size_t i = 0; i < num_of_pages; ++i){
                 auto page = std::make_unique<Page>(Page{
                     DeviceBufferView{ptr + i * 2 * page_size, 2 * page_size * sizeof(T)}
                 });
                 pages.push_back(std::move(page));
-                free_pages.push(pages.back().get());
+                free_pages.push_back(pages.back().get());
             }
         }
 
@@ -137,7 +67,6 @@ class PagingCache{
         T* const* page_table_data{nullptr};
         std::size_t page_size;
         std::size_t capacity{0};
-        std::size_t utilization{0};
 
         private:
             void attach(Page* page) {
@@ -150,7 +79,7 @@ class PagingCache{
                 if (!owner || ptr.empty()) return;
                 std::scoped_lock lock{owner->free_pages_mutex};
                 for (auto page: ptr){
-                    owner->free_pages.push(page);
+                    owner->free_pages.push_back(page);
                 }
                 ptr.clear();
             }
@@ -168,8 +97,7 @@ class PagingCache{
               device_page_table{std::move(other.device_page_table)},
               page_table_data{std::exchange(other.page_table_data, nullptr)},
               page_size{other.page_size},
-              capacity{std::exchange(other.capacity, 0)},
-              utilization{std::exchange(other.utilization, 0)} {}
+              capacity{std::exchange(other.capacity, 0)} {}
 
         PagedMemory& operator=(PagedMemory&& other){
             if (this == &other) return *this;
@@ -180,7 +108,6 @@ class PagingCache{
             page_table_data = std::exchange(other.page_table_data, nullptr);
             page_size = other.page_size;
             capacity = std::exchange(other.capacity, 0);
-            utilization = std::exchange(other.utilization, 0);
 
             return *this;
         };
@@ -226,18 +153,6 @@ class PagingCache{
             free_pages();
         }
 
-        void set_cache_keys(const std::shared_ptr<const std::vector<uint32_t>>& tokens, std::size_t layer) {
-            const auto full_pages = std::min(tokens->size() / TOKENS_PER_PAGE, utilization / page_size);
-            for (std::size_t i = 0; i < full_pages; ++i) {
-                auto* page = ptr[i];
-                const auto prefix = std::span<const uint32_t>{*tokens}.first((i + 1) * TOKENS_PER_PAGE);
-                page->make_hash_key(prefix);
-                page->layer = layer;
-                page->cached_tokens = tokens;
-                page->prefix_size = prefix.size();
-            }
-        }
-
         void append_entry(DeviceBufferView keys, DeviceBufferView values, std::size_t offset){
             const auto* key_data = reinterpret_cast<const std::byte*>(keys.data);
             const auto* value_data = reinterpret_cast<const std::byte*>(values.data);
@@ -260,7 +175,6 @@ class PagingCache{
                 ++current_page;
                 page_offset = 0;
             }
-            utilization = std::max(utilization, offset + keys.bytes / sizeof(T));
         }
 
         Iterator key_begin() const {
@@ -274,39 +188,17 @@ class PagingCache{
         friend class PagingCache;
     };
 
-    std::optional<std::size_t> request_memory(std::span<PagedMemory> layers,
-        std::span<const uint32_t> tokens, std::size_t cached_tokens, std::size_t budget) {
+    void request_memory(std::span<PagedMemory> layers, std::size_t tokens) {
         std::scoped_lock lock{free_pages_mutex};
-
-        // Collect complete chunks before removing any pages from the queue.
-        std::vector<Page*> matches;
-        if (cached_tokens == 0 && layers.front().ptr.empty()) {
-            for (std::size_t end = TOKENS_PER_PAGE; end < tokens.size(); end += TOKENS_PER_PAGE) {
-                const auto prefix = tokens.first(end);
-                const auto key = Page::hash_key(prefix);
-                const auto start = matches.size();
-                for (std::size_t layer = 0; layer < layers.size(); ++layer) {
-                    auto* page = free_pages.find(key, prefix, layer);
-                    if (!page) break;
-                    matches.push_back(page);
-                }
-                if (matches.size() - start != layers.size()) {
-                    matches.resize(start);
-                    break;
-                }
-            }
-        }
-
-        const auto reused_pages = matches.size() / layers.size();
-        const auto prefix_tokens = cached_tokens + reused_pages * TOKENS_PER_PAGE;
-        const auto count = std::min(budget, tokens.size() - prefix_tokens);
-        const auto required_pages = (prefix_tokens + count + TOKENS_PER_PAGE - 1) / TOKENS_PER_PAGE;
+        const auto required_pages = (tokens + TOKENS_PER_PAGE - 1) / TOKENS_PER_PAGE;
 
         std::size_t pages_needed = 0;
         for (const auto& layer : layers) {
             pages_needed += required_pages - std::min(required_pages, layer.ptr.size());
         }
-        if (free_pages.size() < pages_needed) return std::nullopt;
+        if (free_pages.size() < pages_needed) {
+            throw std::bad_alloc{};
+        }
 
         for (auto& layer : layers) {
             layer.ptr.reserve(required_pages);
@@ -314,19 +206,12 @@ class PagingCache{
             layer.page_table_data = layer.device_page_table.data();
         }
 
-        for (std::size_t i = 0; i < matches.size(); ++i) {
-            auto* page = matches[i];
-            free_pages.take(page);
-            auto& layer = layers[i % layers.size()];
-            layer.attach(page);
-            layer.utilization += page_size;
-        }
         for (auto& layer : layers) {
             while (layer.ptr.size() < required_pages) {
-                layer.attach(free_pages.pop());
+                layer.attach(free_pages.back());
+                free_pages.pop_back();
             }
         }
-        return prefix_tokens;
     }
 
     friend class PagedMemory;
